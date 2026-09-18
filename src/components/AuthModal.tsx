@@ -88,7 +88,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
             <div>
               <h2 className="text-lg font-bold">Личный кабинет</h2>
-              <p className="text-xs text-slate-400">Персональная база данных и проекты</p>
+              <p className="text-xs text-slate-400">Авторизация и права доступа к проектам</p>
             </div>
           </div>
 
@@ -152,10 +152,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-start gap-2.5">
             <Database className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div>
-              <strong>Индивидуальная база данных:</strong>
+              <strong>Единая база данных проектов:</strong>
               <div className="text-slate-300 text-[11px] mt-0.5 leading-relaxed">
-                Для каждого пользователя автоматически создается личное рабочее пространство со
-                своими проектами, клиентами и синхронизацией с Google Drive.
+                Все участники (дизайнер, заказчик, поставщик) работают в едином общем проекте в реальном времени с автоматическим разграничением прав по роли Google-аккаунта.
               </div>
             </div>
           </div>
@@ -243,7 +242,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors shadow-md disabled:opacity-50"
             >
               <LogIn className="w-4 h-4" />
-              {isLoading ? 'Вход...' : 'Войти в личную базу данных'}
+              {isLoading ? 'Вход...' : 'Войти в систему'}
             </button>
           </form>
         </div>

@@ -32,6 +32,7 @@ export interface ProjectRecord {
   ownerEmail: string;
   members: ProjectMember[];
   status: 'active' | 'completed' | 'archived';
+  version?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -93,8 +94,8 @@ const DEFAULT_PROJECT_1: ProjectRecord = {
   description: 'Комплектация дизайн-проекта: итальянская мебель, отделочные материалы, трековое освещение и сантехника',
   rooms: DEFAULT_ROOMS,
   categories: ['Мебель', 'Освещение', 'Сантехника', 'Отделочные материалы', 'Двери и столярка', 'Текстиль и декор', 'Бытовая техника', 'Климат и отопление'],
-  ownerId: 'default-user',
-  ownerEmail: 'demo@complspec.kz',
+  ownerId: 'xGO6LCUDwJa1e5o8LWhmN26LyJL2',
+  ownerEmail: 'wl.chvlad@gmail.com',
   members: [
     {
       id: 'mem-1',
@@ -137,8 +138,8 @@ const DEFAULT_PROJECT_2: ProjectRecord = {
     { id: 'room-205', name: 'SPA-зона и сауна', area: 28.0 },
   ],
   categories: ['Мебель', 'Освещение', 'Сантехника', 'Отделочные материалы', 'Двери и столярка', 'Текстиль и декор', 'Бытовая техника'],
-  ownerId: 'default-user',
-  ownerEmail: 'demo@complspec.kz',
+  ownerId: 'xGO6LCUDwJa1e5o8LWhmN26LyJL2',
+  ownerEmail: 'wl.chvlad@gmail.com',
   members: [],
   status: 'active',
   createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
@@ -432,37 +433,6 @@ class DatabaseManager {
     // Check if this new user has pending invitations
     this.resolveInvitationsForUser(newUser.email, newUser.name);
 
-    // If new user has 0 projects, create their first personal workspace project in Tenge!
-    const userProjects = this.getProjectsForUser(newUser.id, newUser.email);
-    if (userProjects.length === 0) {
-      const personalProjId = `proj-${Date.now()}`;
-      const personalProject: ProjectRecord = {
-        id: personalProjId,
-        name: 'Мой первый проект',
-        client: 'Новый заказчик',
-        address: 'г. Алматы / Астана',
-        area: 85.0,
-        totalBudget: 15000000,
-        currency: '₸',
-        description: 'Спецификация комплектации интерьера',
-        rooms: [
-          { id: `r-${Date.now()}-1`, name: 'Гостиная', area: 28.0 },
-          { id: `r-${Date.now()}-2`, name: 'Спальня', area: 16.0 },
-          { id: `r-${Date.now()}-3`, name: 'Кухня', area: 14.0 },
-          { id: `r-${Date.now()}-4`, name: 'Санузел', area: 6.0 },
-        ],
-        categories: ['Мебель', 'Освещение', 'Сантехника', 'Отделочные материалы', 'Двери и столярка', 'Текстиль и декор'],
-        ownerId: newUser.id,
-        ownerEmail: newUser.email,
-        members: [],
-        status: 'active',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      this.data.projects[personalProjId] = personalProject;
-      this.data.items[personalProjId] = [];
-    }
-
     this.save();
     return newUser;
   }
@@ -470,31 +440,44 @@ class DatabaseManager {
   // --- Projects ---
   public getProjectsForUser(userId?: string, userEmail?: string): (ProjectRecord & { itemsCount: number; userRoleInProject: 'team' | 'client' | 'contractor' })[] {
     const list = Object.values(this.data.projects);
+    const cleanEmail = (userEmail || '').toLowerCase().trim();
+
+    // Master studio admin/moderator who owns and sees all projects
+    const isMasterAdmin = cleanEmail === 'wl.chvlad@gmail.com';
 
     return list
       .filter((p) => {
-        // If no user specified, return all projects (demo mode)
-        if (!userId && !userEmail) return true;
+        // Master admin sees ALL projects without exception
+        if (isMasterAdmin) return true;
 
-        const isOwner = (userId && p.ownerId === userId) || (userEmail && p.ownerEmail && p.ownerEmail.toLowerCase() === userEmail.toLowerCase());
-        const isMember = p.members && p.members.some((m) => userEmail && m.email.toLowerCase() === userEmail.toLowerCase());
-        
-        // Also allow access to default demo projects
-        const isDefaultProj = p.id === 'proj-1' || p.id === 'proj-2';
+        // If no user specified at all (unauthenticated / demo), return all projects for demo preview
+        if (!userId && !cleanEmail) return true;
 
-        return isOwner || isMember || isDefaultProj;
+        // Project creator/owner sees their project
+        const isOwner =
+          (userId && p.ownerId === userId) ||
+          (cleanEmail && p.ownerEmail && p.ownerEmail.toLowerCase().trim() === cleanEmail);
+        if (isOwner) return true;
+
+        // Invited members see this project
+        const isMember =
+          p.members &&
+          p.members.some((m) => m.email && m.email.toLowerCase().trim() === cleanEmail);
+        if (isMember) return true;
+
+        // Otherwise this project is completely hidden from this user
+        return false;
       })
       .map((p) => {
         const items = this.data.items[p.id] || [];
-        let role: 'team' | 'client' | 'contractor' = 'team';
+        let role: 'team' | 'client' | 'contractor' = 'client';
 
-        if (userEmail) {
-          const isOwner = p.ownerEmail && p.ownerEmail.toLowerCase() === userEmail.toLowerCase();
-          if (isOwner) {
-            role = 'team';
-          } else {
-            const member = p.members?.find((m) => m.email.toLowerCase() === userEmail.toLowerCase());
-            if (member) role = member.role;
+        if (isMasterAdmin || (cleanEmail && p.ownerEmail && p.ownerEmail.toLowerCase().trim() === cleanEmail)) {
+          role = 'team';
+        } else if (cleanEmail) {
+          const member = p.members?.find((m) => m.email && m.email.toLowerCase().trim() === cleanEmail);
+          if (member) {
+            role = member.role;
           }
         }
 
@@ -551,8 +534,10 @@ class DatabaseManager {
     const project = this.data.projects[projectId];
     if (!project) return null;
 
+    const currentVer = project.version || 1;
     Object.assign(project, updates, {
       updatedAt: new Date().toISOString(),
+      version: currentVer + 1,
       currency: '₸', // Always in Tenge
     });
 
@@ -573,11 +558,43 @@ class DatabaseManager {
     return this.data.items[projectId] || [];
   }
 
-  public syncProjectAndItems(projectId: string, projectUpdates?: Partial<ProjectRecord>, items?: any[]): { success: boolean; lastModified: number } {
-    if (this.data.projects[projectId] && projectUpdates) {
-      Object.assign(this.data.projects[projectId], projectUpdates, {
-        updatedAt: new Date().toISOString(),
-      });
+  public syncProjectAndItems(
+    projectId: string,
+    projectUpdates?: Partial<ProjectRecord>,
+    items?: any[]
+  ): { success: boolean; updatedAt: string; version: number; itemsCount: number } {
+    const now = new Date().toISOString();
+
+    if (!this.data.projects[projectId]) {
+      this.data.projects[projectId] = {
+        id: projectId,
+        name: projectUpdates?.name || 'Проект',
+        client: projectUpdates?.client || '',
+        address: projectUpdates?.address || '',
+        area: Number(projectUpdates?.area) || 0,
+        totalBudget: Number(projectUpdates?.totalBudget) || 0,
+        currency: '₸',
+        description: projectUpdates?.description || '',
+        rooms: projectUpdates?.rooms || [],
+        categories: projectUpdates?.categories || [],
+        ownerId: projectUpdates?.ownerId || 'default-user',
+        ownerEmail: projectUpdates?.ownerEmail || 'demo@complspec.kz',
+        members: projectUpdates?.members || [],
+        status: projectUpdates?.status || 'active',
+        createdAt: now,
+        updatedAt: now,
+        version: 1,
+        ...projectUpdates,
+      };
+    } else {
+      const currentVer = this.data.projects[projectId].version || 1;
+      if (projectUpdates) {
+        // Protect members, ownerId, and ownerEmail from accidental overwrite by client item updates
+        const { members, ownerId, ownerEmail, ...safeUpdates } = projectUpdates;
+        Object.assign(this.data.projects[projectId], safeUpdates);
+      }
+      this.data.projects[projectId].updatedAt = now;
+      this.data.projects[projectId].version = currentVer + 1;
     }
 
     if (Array.isArray(items)) {
@@ -588,7 +605,13 @@ class DatabaseManager {
     }
 
     this.save();
-    return { success: true, lastModified: Date.now() };
+    const proj = this.data.projects[projectId];
+    return {
+      success: true,
+      updatedAt: proj.updatedAt,
+      version: proj.version || 1,
+      itemsCount: (this.data.items[projectId] || []).length,
+    };
   }
 
   // --- Invitations & Collaboration ---
@@ -608,6 +631,8 @@ class DatabaseManager {
     if (existingMember) {
       existingMember.role = role;
       existingMember.status = 'active';
+      project.updatedAt = new Date().toISOString();
+      project.version = (project.version || 1) + 1;
       this.save();
       return { success: true, member: existingMember };
     }
@@ -622,6 +647,7 @@ class DatabaseManager {
 
     project.members.push(newMember);
     project.updatedAt = new Date().toISOString();
+    project.version = (project.version || 1) + 1;
 
     const invId = `inv-${Date.now()}`;
     this.data.invitations[invId] = {
@@ -647,6 +673,7 @@ class DatabaseManager {
     const cleanEmail = email.trim().toLowerCase();
     project.members = project.members.filter((m) => m.email.toLowerCase() !== cleanEmail);
     project.updatedAt = new Date().toISOString();
+    project.version = (project.version || 1) + 1;
     this.save();
     return true;
   }

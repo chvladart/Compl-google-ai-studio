@@ -302,12 +302,12 @@ export const INITIAL_ITEMS: SpecificationItem[] = [
 ];
 
 export const INITIAL_USER: UserProfile = {
-  id: 'user-1',
-  name: 'Влад Черенков',
+  id: 'user-admin',
+  name: 'Vladislav Churikov',
   email: 'wl.chvlad@gmail.com',
-  avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&auto=format&fit=crop&q=80',
+  avatar: 'https://lh3.googleusercontent.com/a/ACg8ocJ-lKn_zuiBrrORLa23b-8K9hJbh1T-YyVVAh3ZJzif0xtwrOpLdA=s96-c',
   role: 'team',
-  roleTitle: 'Ведущий дизайнер / Комплектатор',
+  roleTitle: 'Администратор / Ведущий дизайнер',
   organization: 'COMPLSPEC STUDIO',
 };
 

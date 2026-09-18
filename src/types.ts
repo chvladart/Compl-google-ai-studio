@@ -21,6 +21,15 @@ export interface Room {
   area: number; // м²
 }
 
+export interface SupplierQuestion {
+  id: string;
+  author: string; // Имя или email (например, "Поставщик (Interier Service)" или "Дизайнер")
+  role: 'contractor' | 'team';
+  text: string;
+  createdAt: string;
+  resolved?: boolean;
+}
+
 export interface SpecificationItem {
   id: string;
   projectId?: string;            // ID проекта, к которому относится позиция
@@ -43,6 +52,8 @@ export interface SpecificationItem {
   status: ItemStatus;            // Статус комплектации
   clientStatus?: ClientApprovalStatus; // Статус со стороны клиента (согласовано / внимание / замена)
   clientComment?: string;        // Замечание или вопрос клиента
+  supplierQuestions?: SupplierQuestion[]; // Внутренние вопросы и уточнения поставщика (видны ТОЛЬКО Команде и Поставщику)
+  supplierNotes?: string;        // Технические пометки от поставщика
   deliveryTime: string;          // Срок поставки / готовности
   supplier: string;              // Поставщик / Салон / Контакт
   link: string;                  // Ссылка на товар или чертеж
@@ -76,6 +87,7 @@ export interface Project {
   ownerEmail?: string;
   members?: ProjectMember[];
   status?: 'active' | 'completed' | 'archived';
+  version?: number;
   createdAt?: string;
   updatedAt?: string;
   itemsCount?: number;

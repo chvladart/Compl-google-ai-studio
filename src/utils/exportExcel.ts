@@ -166,19 +166,30 @@ export async function exportSpecificationToExcel(
       }
     }
 
-    // Embed Product Photo (Large, High Resolution, not compressed)
+    // Embed Product Photo (Proportionally fitted by longer side, no distortion)
     if (item.mainPhoto) {
       try {
-        const photoData = await loadImageAsBase64(item.mainPhoto, 1000);
+        const photoData = await loadImageAsBase64(item.mainPhoto, 1200);
         if (photoData) {
           const imageId = workbook.addImage({
             base64: photoData.base64,
             extension: photoData.extension,
           });
 
+          // Available bounding box inside Column A (width 24 ~ 180px, row height 100pt ~ 133px)
+          const maxBoxW = 155;
+          const maxBoxH = 120;
+          const scale = Math.min(maxBoxW / photoData.width, maxBoxH / photoData.height);
+          const fitW = Math.max(20, Math.round(photoData.width * scale));
+          const fitH = Math.max(20, Math.round(photoData.height * scale));
+
+          // Center within cell A
+          const colOffset = Math.max(0.04, (180 - fitW) / (2 * 180));
+          const rowOffset = Math.max(0.04, (133 - fitH) / (2 * 133));
+
           worksheet.addImage(imageId, {
-            tl: { col: 0.1, row: currentRowIndex - 1 + 0.08 },
-            ext: { width: 145, height: 115 }, // Large crisp thumbnail
+            tl: { col: colOffset, row: currentRowIndex - 1 + rowOffset },
+            ext: { width: fitW, height: fitH },
             editAs: 'oneCell',
           });
         }

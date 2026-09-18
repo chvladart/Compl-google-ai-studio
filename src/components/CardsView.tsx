@@ -43,6 +43,7 @@ interface CardsViewProps {
   onOpenLightbox?: (photoUrl: string, title: string, allPhotos?: string[]) => void;
   onAddItemToGroup?: (roomId?: string) => void;
   onAddItemInGroup?: (roomId?: string) => void;
+  onOpenSupplierQuestions?: (item: SpecificationItem) => void;
 }
 
 export const CardsView: React.FC<CardsViewProps> = ({
@@ -61,6 +62,7 @@ export const CardsView: React.FC<CardsViewProps> = ({
   onOpenLightbox,
   onAddItemToGroup,
   onAddItemInGroup,
+  onOpenSupplierQuestions,
 }) => {
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
@@ -624,21 +626,75 @@ export const CardsView: React.FC<CardsViewProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <div className="flex items-center justify-between text-xs pt-1">
-                    <span className="text-amber-500 font-semibold">Готовность к монтажу</span>
-                    <button
-                      type="button"
-                      onClick={() => onOpenQr(item)}
-                      className={`text-xs flex items-center gap-1 transition-colors cursor-pointer ${
-                        isDarkMode
-                          ? 'text-slate-300 hover:text-white'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <QrCode className="w-3.5 h-3.5" />
-                      <span>Наклейка</span>
-                    </button>
+                  <div className="space-y-2 pt-1 border-t border-slate-700/30">
+                    {/* Contractor status changer */}
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-slate-400 font-medium">Статус:</span>
+                      <select
+                        value={item.status}
+                        onChange={(e) =>
+                          onStatusChange && onStatusChange(item.id, e.target.value as ItemStatus)
+                        }
+                        className={`text-[11px] font-semibold rounded-lg px-2 py-1 border cursor-pointer ${statusMeta.bg} ${statusMeta.text} ${statusMeta.border}`}
+                      >
+                        {Object.entries(STATUS_CONFIG).map(([stKey, stMeta]) => (
+                          <option
+                            key={stKey}
+                            value={stKey}
+                            className={isDarkMode ? 'bg-[#0f172a] text-white' : 'bg-white text-slate-900'}
+                          >
+                            {stMeta.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs pt-0.5">
+                      <span className="text-amber-500 font-semibold">Готовность к монтажу</span>
+                      <button
+                        type="button"
+                        onClick={() => onOpenQr(item)}
+                        className={`text-xs flex items-center gap-1 transition-colors cursor-pointer ${
+                          isDarkMode
+                            ? 'text-slate-300 hover:text-white'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        <QrCode className="w-3.5 h-3.5" />
+                        <span>Наклейка</span>
+                      </button>
+                    </div>
                   </div>
+                )}
+
+                {/* Supplier Questions trigger button (visible ONLY for Team and Contractor) */}
+                {userRole !== 'client' && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenSupplierQuestions?.(item);
+                    }}
+                    className={`w-full mt-2 py-1.5 px-3 rounded-lg border text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
+                      (item.supplierQuestions?.length || 0) > 0
+                        ? 'bg-sky-500/15 border-sky-500/40 text-sky-400 hover:bg-sky-500/25'
+                        : isDarkMode
+                        ? 'bg-[#161f30] hover:bg-slate-800 border-[#23314c] text-slate-300'
+                        : 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <MessageSquare className="w-3.5 h-3.5 text-sky-400" />
+                      <span>Вопросы поставщика</span>
+                    </div>
+                    {(item.supplierQuestions?.length || 0) > 0 ? (
+                      <span className="w-4 h-4 rounded-full bg-sky-500 text-slate-950 font-bold text-[9px] flex items-center justify-center">
+                        {item.supplierQuestions!.length}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-500">+</span>
+                    )}
+                  </button>
                 )}
               </div>
             </div>

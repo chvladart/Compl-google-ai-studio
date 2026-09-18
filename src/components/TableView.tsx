@@ -53,6 +53,7 @@ interface TableViewProps {
   onOpenLightbox?: (photoUrl: string, title: string, allPhotos?: string[]) => void;
   onAddItemToGroup?: (roomId?: string) => void;
   onAddItemInGroup?: (roomId?: string) => void;
+  onOpenSupplierQuestions?: (item: SpecificationItem) => void;
 }
 
 export const TableView: React.FC<TableViewProps> = ({
@@ -72,6 +73,7 @@ export const TableView: React.FC<TableViewProps> = ({
   onOpenLightbox,
   onAddItemToGroup,
   onAddItemInGroup,
+  onOpenSupplierQuestions,
 }) => {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
@@ -739,7 +741,6 @@ export const TableView: React.FC<TableViewProps> = ({
                                     onChange={(e) =>
                                       onStatusChange(item.id, e.target.value as ItemStatus)
                                     }
-                                    disabled={userRole === 'contractor'}
                                     className={`w-full text-xs font-medium rounded-lg px-2.5 py-1.5 border appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-amber-500 ${statusMeta.bg} ${statusMeta.text} ${statusMeta.border}`}
                                   >
                                     {Object.entries(STATUS_CONFIG).map(([stKey, stMeta]) => (
@@ -758,13 +759,44 @@ export const TableView: React.FC<TableViewProps> = ({
                                   </select>
 
                                   {/* Client approval badge preview for team */}
-                                  {item.clientStatus && item.clientStatus !== 'pending' && (
+                                  {userRole === 'team' && item.clientStatus && item.clientStatus !== 'pending' && (
                                     <div
                                       className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 border ${clientMeta.bg} ${clientMeta.text} ${clientMeta.border}`}
                                     >
                                       <span>{clientMeta.icon}</span>
                                       <span className="truncate">{clientMeta.shortLabel}</span>
                                     </div>
+                                  )}
+
+                                  {/* Supplier questions trigger button (visible ONLY for Team and Contractor) */}
+                                  {userRole !== 'client' && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onOpenSupplierQuestions?.(item);
+                                      }}
+                                      className={`w-full mt-1.5 flex items-center justify-between text-[10px] font-semibold px-2 py-1 rounded-md border transition-all cursor-pointer ${
+                                        (item.supplierQuestions?.length || 0) > 0
+                                          ? 'bg-sky-500/15 text-sky-400 border-sky-500/40 hover:bg-sky-500/25'
+                                          : isDarkMode
+                                          ? 'bg-slate-800/80 text-slate-400 hover:text-slate-200 border-slate-700/80'
+                                          : 'bg-slate-100 text-slate-600 hover:text-slate-900 border-slate-300'
+                                      }`}
+                                      title="Вопросы и уточнения поставщика (видны ТОЛЬКО Команде и Поставщику)"
+                                    >
+                                      <div className="flex items-center gap-1">
+                                        <MessageSquare className="w-3 h-3 text-sky-400" />
+                                        <span>Вопросы поставщика</span>
+                                      </div>
+                                      {(item.supplierQuestions?.length || 0) > 0 ? (
+                                        <span className="w-4 h-4 rounded-full bg-sky-500 text-slate-950 font-bold text-[9px] flex items-center justify-center shrink-0">
+                                          {item.supplierQuestions!.length}
+                                        </span>
+                                      ) : (
+                                        <span className="text-[9px] opacity-70">+</span>
+                                      )}
+                                    </button>
                                   )}
                                 </div>
                               )}
@@ -875,6 +907,22 @@ export const TableView: React.FC<TableViewProps> = ({
                                           <ExternalLink className="w-3.5 h-3.5" />
                                           <span>Сайт / Модель</span>
                                         </a>
+                                      )}
+                                      {userRole !== 'client' && (
+                                        <button
+                                          type="button"
+                                          onClick={() => onOpenSupplierQuestions?.(item)}
+                                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors cursor-pointer ${
+                                            (item.supplierQuestions?.length || 0) > 0
+                                              ? 'bg-sky-500/15 border-sky-500/40 text-sky-400 hover:bg-sky-500/25'
+                                              : isDarkMode
+                                              ? 'bg-[#161f30] border-[#24324a] text-slate-300 hover:bg-slate-800'
+                                              : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
+                                          }`}
+                                        >
+                                          <MessageSquare className="w-3.5 h-3.5 text-sky-400" />
+                                          <span>Вопросы поставщика ({(item.supplierQuestions?.length || 0)})</span>
+                                        </button>
                                       )}
                                       <button
                                         type="button"

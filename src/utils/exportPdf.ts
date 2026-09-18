@@ -2,6 +2,7 @@ import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { Project, SpecificationItem } from '../types';
 import { calcItemTotal, formatCurrency, STATUS_CONFIG } from './formatters';
+import { loadImageAsBase64 } from './imageLoader';
 import { generateQrDataUrl } from './qrCode';
 
 /**
@@ -24,20 +25,26 @@ export async function exportSpecificationToPdf(
     }
   }
 
-  // 2. Preload all main photos so html2canvas renders them reliably
-  onProgress?.('Загрузка изображений...');
-  const preloadPromises = items
-    .filter((it) => it.mainPhoto)
-    .map((it) => {
-      return new Promise<void>((resolve) => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = () => resolve();
-        img.onerror = () => resolve();
-        img.src = it.mainPhoto!;
-      });
-    });
-  await Promise.all(preloadPromises);
+  // 2. Preload and convert all main photos to get natural dimensions and clean base64 data URLs
+  onProgress?.('Загрузка и калибровка пропорций изображений...');
+  const photosMap = new Map<string, { dataUrl: string; width: number; height: number }>();
+  await Promise.all(
+    items.map(async (it) => {
+      if (!it.mainPhoto) return;
+      try {
+        const info = await loadImageAsBase64(it.mainPhoto, 1200);
+        if (info) {
+          photosMap.set(it.id, {
+            dataUrl: info.dataUrl,
+            width: info.width,
+            height: info.height,
+          });
+        }
+      } catch (err) {
+        console.warn('Failed to preload photo for item:', it.code, err);
+      }
+    })
+  );
 
   // 3. Pre-generate QR codes for all items
   onProgress?.('Генерация QR-кодов...');
@@ -128,16 +135,27 @@ export async function exportSpecificationToPdf(
                 const st = STATUS_CONFIG[item.status];
                 const statusLabel = st ? st.label : item.status;
 
+                const photoMeta = photosMap.get(item.id);
+                const BOX_W = 166;
+                const BOX_H = 140;
+                let photoHtml = `<span style="color: #94a3b8; font-size: 11px; font-weight: 600;">Нет фото</span>`;
+
+                if (photoMeta) {
+                  // Inscribe proportionally by the longer side (aspect fit)
+                  const scale = Math.min(BOX_W / photoMeta.width, BOX_H / photoMeta.height);
+                  const renderW = Math.max(16, Math.round(photoMeta.width * scale));
+                  const renderH = Math.max(16, Math.round(photoMeta.height * scale));
+                  photoHtml = `<img src="${photoMeta.dataUrl}" style="width: ${renderW}px; height: ${renderH}px; max-width: ${BOX_W}px; max-height: ${BOX_H}px; object-fit: contain; display: block; margin: auto;" alt="${item.name}" />`;
+                } else if (item.mainPhoto) {
+                  photoHtml = `<img src="${item.mainPhoto}" crossorigin="anonymous" style="max-width: ${BOX_W}px; max-height: ${BOX_H}px; width: auto; height: auto; object-fit: contain; display: block; margin: auto;" onerror="this.style.display='none'" />`;
+                }
+
                 return `
                 <div style="display: flex; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; height: 146px; min-height: 146px; max-height: 146px; box-sizing: border-box; width: 100%;">
                   
-                  <!-- Photo Thumbnail -->
-                  <div style="width: 170px; min-width: 170px; max-width: 170px; height: 144px; background: #e2e8f0; position: relative; border-right: 1px solid #cbd5e1; display: flex; align-items: center; justify-content: center; overflow: hidden; border-top-left-radius: 7px; border-bottom-left-radius: 7px;">
-                    ${
-                      item.mainPhoto
-                        ? `<img src="${item.mainPhoto}" crossorigin="anonymous" style="width: 100%; height: 100%; object-fit: cover; display: block;" onerror="this.style.display='none'" />`
-                        : `<span style="color: #94a3b8; font-size: 11px; font-weight: 600;">Нет фото</span>`
-                    }
+                  <!-- Photo Thumbnail: Proportional aspect fit by longer side -->
+                  <div style="width: 170px; min-width: 170px; max-width: 170px; height: 144px; background: #ffffff; position: relative; border-right: 1px solid #cbd5e1; display: flex; align-items: center; justify-content: center; overflow: hidden; border-top-left-radius: 7px; border-bottom-left-radius: 7px; padding: 2px; box-sizing: border-box;">
+                    ${photoHtml}
                     <div style="position: absolute; top: 6px; left: 6px; background: #0f172a; color: #ffffff; font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.3); font-family: monospace;">
                       ${item.code}
                     </div>

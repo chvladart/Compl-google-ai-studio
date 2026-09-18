@@ -5,31 +5,33 @@ import {
   FolderKanban,
   HardDrive,
   Moon,
-  Plus,
   Settings,
   ShieldCheck,
   Sun,
   UserPlus,
-  Cloud,
   ChevronDown,
   Building2,
+  Eye,
 } from 'lucide-react';
-import { Project, UserProfile } from '../types';
+import { Project, UserProfile, UserRole } from '../types';
 
 interface HeaderProps {
   project: Project;
   user: UserProfile;
   projectsCount?: number;
   syncStatus?: 'synced' | 'syncing' | 'offline';
+  isAdmin?: boolean;
+  isRealAdmin?: boolean;
+  simulatedRole?: UserRole | null;
+  onSetSimulatedRole?: (role: UserRole | null) => void;
   onOpenSettings: () => void;
   onOpenProjectSwitcher: () => void;
   onOpenInvite: () => void;
-  onOpenGoogleDrive: () => void;
   onOpenAuth: () => void;
   onOpenRooms?: () => void;
   onExportPdf: () => void;
   onExportExcel: () => void;
-  onOpenRoleModal: () => void;
+  onOpenRoleModal?: () => void;
   onOpenCloud: () => void;
   isDarkMode: boolean;
   onToggleTheme: () => void;
@@ -40,10 +42,13 @@ export const Header: React.FC<HeaderProps> = ({
   user,
   projectsCount = 1,
   syncStatus = 'synced',
+  isAdmin = false,
+  isRealAdmin = false,
+  simulatedRole = null,
+  onSetSimulatedRole,
   onOpenSettings,
   onOpenProjectSwitcher,
   onOpenInvite,
-  onOpenGoogleDrive,
   onOpenAuth,
   onOpenRooms,
   onExportPdf,
@@ -94,7 +99,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center gap-1.5">
             <button
               onClick={onOpenProjectSwitcher}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all max-w-[180px] sm:max-w-[280px] truncate cursor-pointer ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all max-w-[200px] sm:max-w-[320px] truncate cursor-pointer ${
                 isDarkMode
                   ? 'bg-[#141c2b] border-amber-500/40 text-slate-100 hover:border-amber-400 hover:bg-[#1a2538]'
                   : 'bg-amber-50/70 border-amber-400 text-slate-900 hover:bg-amber-100'
@@ -104,20 +109,6 @@ export const Header: React.FC<HeaderProps> = ({
               <FolderKanban className="w-4 h-4 text-amber-500 shrink-0" />
               <span className="truncate">{project?.name || 'Проект'}</span>
               <ChevronDown className="w-3.5 h-3.5 text-amber-500 shrink-0 ml-0.5" />
-            </button>
-
-            {/* Quick Add Project button */}
-            <button
-              onClick={onOpenProjectSwitcher}
-              className={`p-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors ${
-                isDarkMode
-                  ? 'bg-[#141c2b] border-[#223049] text-amber-400 hover:border-amber-500 hover:bg-[#1a2538]'
-                  : 'bg-slate-50 border-slate-200 text-amber-600 hover:bg-amber-50 hover:border-amber-400'
-              }`}
-              title="Создать или выбрать проект"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span className="hidden lg:inline text-[11px]">Проекты ({projectsCount})</span>
             </button>
 
             {/* Project Settings Trigger */}
@@ -135,40 +126,63 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Right: Actions, Collaboration, Google Drive, Exports, User */}
+        {/* Right: Actions, Collaboration, Online DB, Exports, User */}
         <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-          {/* Invite Collaborator (Team, Client, Contractor) */}
-          <button
-            onClick={onOpenInvite}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
-              isDarkMode
-                ? 'bg-amber-500/10 border-amber-500/40 text-amber-400 hover:bg-amber-500/20'
-                : 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100'
-            }`}
-            title="Пригласить в проект: команду, заказчика или подрядчика"
-          >
-            <UserPlus className="w-3.5 h-3.5 text-amber-500" />
-            <span>Пригласить</span>
-            {project?.members && project.members.length > 0 && (
-              <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 font-black text-[10px]">
-                {project.members.length}
-              </span>
-            )}
-          </button>
+          {/* Access & Role Management Admin Trigger - ONLY for Admin */}
+          {isAdmin && (
+            <button
+              onClick={onOpenInvite}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
+                isDarkMode
+                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-400 hover:bg-amber-500/25 shadow-sm'
+                  : 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100'
+              }`}
+              title="Админ-панель: Управление доступом и распределение ролей участников проекта"
+            >
+              <UserPlus className="w-3.5 h-3.5 text-amber-500" />
+              <span>Доступ и роли</span>
+              {project?.members && project.members.length > 0 && (
+                <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 font-black text-[10px]">
+                  {project.members.length}
+                </span>
+              )}
+            </button>
+          )}
 
-          {/* Google Drive Sync Button */}
-          <button
-            onClick={onOpenGoogleDrive}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-colors cursor-pointer ${
-              isDarkMode
-                ? 'bg-[#141c2b] border-blue-900/40 text-blue-300 hover:border-blue-500/50 hover:bg-blue-950/20'
-                : 'bg-blue-50 border-blue-200 text-blue-800 hover:bg-blue-100'
-            }`}
-            title="Синхронизация с Google Диском (Excel, PDF, база данных)"
-          >
-            <Cloud className="w-3.5 h-3.5 text-blue-400" />
-            <span className="hidden md:inline">Google Диск</span>
-          </button>
+          {/* Admin Role Simulation Switcher - Allows admin to preview as Client or Contractor */}
+          {isRealAdmin && onSetSimulatedRole && (
+            <div
+              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border text-xs font-medium transition-colors ${
+                simulatedRole
+                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                  : isDarkMode
+                  ? 'bg-[#141c2b] border-[#223049] text-slate-300'
+                  : 'bg-slate-50 border-slate-200 text-slate-700'
+              }`}
+              title="Режим симуляции: проверьте, как проект видят Заказчик или Поставщик"
+            >
+              <Eye className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="hidden xl:inline text-[11px] text-slate-400">Вид:</span>
+              <select
+                value={simulatedRole || 'admin'}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  onSetSimulatedRole(val === 'admin' ? null : (val as UserRole));
+                }}
+                className="bg-transparent font-bold text-xs cursor-pointer focus:outline-none"
+              >
+                <option value="admin" className="bg-slate-900 text-white">
+                  Администратор (Вы)
+                </option>
+                <option value="client" className="bg-slate-900 text-emerald-300">
+                  👁️ Заказчик (Клиент)
+                </option>
+                <option value="contractor" className="bg-slate-900 text-sky-300">
+                  👁️ Поставщик
+                </option>
+              </select>
+            </div>
+          )}
 
           {/* Online Sync Indicator */}
           <button
@@ -178,15 +192,23 @@ export const Header: React.FC<HeaderProps> = ({
                 ? 'bg-[#141c2b] border-[#223049] text-slate-300 hover:border-emerald-500/50'
                 : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-emerald-500'
             }`}
-            title="Онлайн база данных: изменения сохраняются автоматически"
+            title="Онлайн база данных: изменения синхронизируются автоматически в реальном времени"
           >
             <HardDrive className="w-3.5 h-3.5 text-emerald-500" />
-            <span className="hidden xl:inline">
-              {syncStatus === 'syncing' ? 'Сохранение...' : 'Онлайн БД'}
+            <span className="hidden sm:inline">
+              {syncStatus === 'syncing'
+                ? 'Сохранение...'
+                : syncStatus === 'offline'
+                ? 'Офлайн'
+                : 'Онлайн БД'}
             </span>
             <span
               className={`w-2 h-2 rounded-full ${
-                syncStatus === 'syncing' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'
+                syncStatus === 'syncing'
+                  ? 'bg-amber-400 animate-pulse'
+                  : syncStatus === 'offline'
+                  ? 'bg-rose-500'
+                  : 'bg-emerald-500'
               }`}
             />
           </button>
@@ -221,7 +243,7 @@ export const Header: React.FC<HeaderProps> = ({
                 ? 'bg-[#141c2b] border-sky-800/40 text-sky-200 hover:bg-sky-950/40'
                 : 'bg-sky-50 border-sky-200 text-sky-800 hover:bg-sky-100'
             }`}
-            title="Личный кабинет и база данных пользователя"
+            title="Личный кабинет и профиль"
           >
             {user.avatar ? (
               <img

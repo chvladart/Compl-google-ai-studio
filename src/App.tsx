@@ -15,9 +15,10 @@ import { SummaryView } from './components/SummaryView';
 import { TableView } from './components/TableView';
 import { ProjectSwitcherModal } from './components/ProjectSwitcherModal';
 import { InviteMemberModal } from './components/InviteMemberModal';
-import { GoogleDriveSyncModal } from './components/GoogleDriveSyncModal';
 import { AuthModal } from './components/AuthModal';
 import { ConfirmDeleteModal } from './components/ConfirmDeleteModal';
+import { SupplierQuestionsModal } from './components/SupplierQuestionsModal';
+import { ShieldAlert, Info, RefreshCw } from 'lucide-react';
 import {
   INITIAL_ITEMS,
   INITIAL_PROJECT,
@@ -33,6 +34,7 @@ import {
   Project,
   Room,
   SpecificationItem,
+  SupplierQuestion,
   UserProfile,
   UserRole,
 } from './types';
@@ -46,6 +48,7 @@ import {
   getAccessToken,
   setCachedAccessToken,
 } from './utils/firebaseAuth';
+import { extractUrlParams } from './utils/linkUtils';
 
 export default function App() {
   // 1. Projects & Multi-Project State
@@ -83,7 +86,6 @@ export default function App() {
   // 5. Modals State
   const [isProjectSwitcherOpen, setIsProjectSwitcherOpen] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
-  const [isGoogleDriveOpen, setIsGoogleDriveOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
@@ -104,14 +106,90 @@ export default function App() {
   const [isRoomsModalOpen, setIsRoomsModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<SpecificationItem | null>(null);
+  const [supplierQuestionsItem, setSupplierQuestionsItem] = useState<SpecificationItem | null>(null);
+  const [simulatedRole, setSimulatedRole] = useState<UserRole | null>(null);
+
+  // 1. Is this user the project owner or supreme admin?
+  const isRealAdmin = useMemo(() => {
+    const userEmail = (currentUser?.email || '').toLowerCase().trim();
+    const ownerEmail = (project?.ownerEmail || '').toLowerCase().trim();
+    if (userEmail === 'wl.chvlad@gmail.com') return true;
+    if (ownerEmail && userEmail === ownerEmail) return true;
+    return false;
+  }, [currentUser?.email, project?.ownerEmail]);
+
+  // 2. What role is assigned to this user in project.members or project.userRoleInProject?
+  const assignedMemberRole = useMemo<UserRole | null>(() => {
+    const userEmail = (currentUser?.email || '').toLowerCase().trim();
+    if (!userEmail) return null;
+    if (isRealAdmin) return 'team';
+
+    // 1. Check in project.members
+    const member = project?.members?.find((m) => m.email.toLowerCase().trim() === userEmail);
+    if (member) return member.role;
+
+    // 2. Check in project.userRoleInProject returned by server
+    if (project?.userRoleInProject) return project.userRoleInProject;
+
+    // 3. Fallback: check in projects list for active project
+    const currentProjFromList = projects.find((p) => p.id === activeProjectId);
+    if (currentProjFromList?.userRoleInProject) return currentProjFromList.userRoleInProject;
+
+    return null;
+  }, [currentUser?.email, project?.members, project?.userRoleInProject, projects, activeProjectId, isRealAdmin]);
+
+  // 3. Project access verification: is user authorized?
+  const hasProjectAccess = useMemo(() => {
+    if (isRealAdmin) return true;
+    if (assignedMemberRole !== null) return true;
+    const userEmail = (currentUser?.email || '').toLowerCase().trim();
+    if (!userEmail || userEmail === 'demo@complspec.kz' || userEmail === 'wl.chvlad@gmail.com') {
+      return true;
+    }
+    return false;
+  }, [isRealAdmin, assignedMemberRole, currentUser?.email]);
+
+  // 4. Effective role for UI view
+  const effectiveRole: UserRole = useMemo(() => {
+    if (isRealAdmin && simulatedRole) {
+      return simulatedRole;
+    }
+    if (isRealAdmin) return 'team';
+    return assignedMemberRole || 'client';
+  }, [isRealAdmin, simulatedRole, assignedMemberRole]);
+
+  // 5. Admin privileges in UI
+  const isAdmin = useMemo(() => {
+    if (isRealAdmin && simulatedRole && simulatedRole !== 'team') {
+      return false; // Hide admin buttons when simulating Client or Contractor
+    }
+    if (isRealAdmin) return true;
+    return assignedMemberRole === 'team';
+  }, [isRealAdmin, simulatedRole, assignedMemberRole]);
+
+  // Synchronize currentUser role with effectiveRole
+  useEffect(() => {
+    if (currentUser.role !== effectiveRole) {
+      setCurrentUser((prev) => ({
+        ...prev,
+        role: effectiveRole,
+        roleTitle:
+          effectiveRole === 'team'
+            ? isRealAdmin ? 'Администратор (Владелец)' : 'Команда (Редактор)'
+            : effectiveRole === 'contractor'
+            ? 'Поставщик / Подрядчик'
+            : 'Заказчик дизайн-проекта',
+      }));
+    }
+  }, [effectiveRole, isRealAdmin, currentUser.role]);
 
   // Fetch projects list from server
   const loadProjects = useCallback(async (userEmail?: string) => {
     try {
       const url = userEmail
-        ? `/api/projects?userEmail=${encodeURIComponent(userEmail)}`
+        ? `/api/projects?userEmail=${encodeURIComponent(userEmail.toLowerCase().trim())}`
         : '/api/projects';
-      const res = await fetch(url);
+      const res = await fetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (data && data.success && Array.isArray(data.projects) && data.projects.length > 0) {
         setProjects(data.projects);
@@ -124,10 +202,14 @@ export default function App() {
   }, []);
 
   // Fetch specific project details & its items
-  const selectProject = useCallback(async (projectId: string) => {
+  const selectProject = useCallback(async (projectId: string, forUserEmail?: string) => {
     try {
       setSyncStatus('syncing');
-      const res = await fetch(`/api/projects/${projectId}`);
+      const emailParam = (forUserEmail || currentUser?.email || '').toLowerCase().trim();
+      const url = emailParam
+        ? `/api/projects/${projectId}?userEmail=${encodeURIComponent(emailParam)}`
+        : `/api/projects/${projectId}`;
+      const res = await fetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (data && data.success && data.project) {
         setProject(data.project);
@@ -144,28 +226,21 @@ export default function App() {
       console.error('Error selecting project:', err);
       setSyncStatus('offline');
     }
-  }, []);
+  }, [currentUser?.email]);
 
-  // Initialize Firebase Auth listener and URL query params
+  // Initialize Firebase Auth listener
   useEffect(() => {
-    // 1. Check URL query params for role or direct project linking
-    const params = new URLSearchParams(window.location.search);
-    const roleParam = params.get('role');
-    const projectParam = params.get('project');
+    const { projectId: projectParam } = extractUrlParams();
 
-    if (roleParam === 'client') {
-      setCurrentUser(MOCK_USER_CLIENT);
-    } else if (roleParam === 'contractor') {
-      setCurrentUser(MOCK_USER_CONTRACTOR);
-    }
-
-    // 2. Initialize Firebase Auth
     const unsubscribe = initAuth(
       async (firebaseUser, token) => {
         setAccessToken(token);
         if (token) setCachedAccessToken(token);
 
-        // Register user in server database workspace
+        const email = (firebaseUser.email || '').toLowerCase().trim();
+        const name = firebaseUser.displayName || email.split('@')[0];
+        const avatar = firebaseUser.photoURL || '';
+
         try {
           const res = await fetch('/api/auth/user', {
             method: 'POST',
@@ -173,30 +248,56 @@ export default function App() {
             body: JSON.stringify({
               id: firebaseUser.uid,
               email: firebaseUser.email,
-              name: firebaseUser.displayName || firebaseUser.email?.split('@')[0],
-              avatar: firebaseUser.photoURL,
+              name,
+              avatar,
             }),
           });
           const authData = await res.json();
-          if (authData.success && authData.user) {
-            setCurrentUser({
-              id: authData.user.id,
-              name: authData.user.name,
-              email: authData.user.email,
-              avatar: authData.user.avatar || firebaseUser.photoURL || '',
-              role: (authData.user.role as UserRole) || 'team',
-              roleTitle: 'Владелец базы данных',
-              isGoogleUser: true,
-            });
+          const confirmedUser = authData.success && authData.user ? authData.user : {
+            id: firebaseUser.uid,
+            name,
+            email,
+            avatar,
+          };
 
-            // Load user's projects
-            const userProjs = await loadProjects(authData.user.email);
-            if (userProjs && userProjs.length > 0) {
-              const targetProj = projectParam
-                ? userProjs.find((p: Project) => p.id === projectParam) || userProjs[0]
-                : userProjs[0];
-              await selectProject(targetProj.id);
+          // 1. Fetch user's projects list first to immediately know assigned roles
+          const userProjs = await loadProjects(confirmedUser.email);
+          let targetProjId = projectParam;
+          let initialRole: UserRole = 'team';
+
+          if (userProjs && userProjs.length > 0) {
+            const targetProj = projectParam
+              ? userProjs.find((p: Project) => p.id === projectParam) || userProjs[0]
+              : userProjs[0];
+            targetProjId = targetProj.id;
+            if (targetProj.userRoleInProject) {
+              initialRole = targetProj.userRoleInProject;
             }
+          }
+
+          const isUserAdmin =
+            confirmedUser.email.toLowerCase() === 'wl.chvlad@gmail.com' ||
+            (project?.ownerEmail && confirmedUser.email.toLowerCase() === project.ownerEmail.toLowerCase());
+          const finalRole = isUserAdmin ? 'team' : initialRole;
+
+          setCurrentUser({
+            id: confirmedUser.id,
+            name: confirmedUser.name,
+            email: confirmedUser.email,
+            avatar: confirmedUser.avatar || avatar,
+            role: finalRole,
+            roleTitle:
+              finalRole === 'team'
+                ? isUserAdmin ? 'Администратор (Владелец)' : 'Команда (Редактор)'
+                : finalRole === 'contractor'
+                ? 'Поставщик / Подрядчик'
+                : 'Заказчик дизайн-проекта',
+            isGoogleUser: true,
+          });
+
+          // 2. Select project with user email passed to populate full role & items
+          if (targetProjId) {
+            await selectProject(targetProjId, confirmedUser.email);
           }
         } catch (err) {
           console.warn('Failed to sync user with server:', err);
@@ -218,12 +319,111 @@ export default function App() {
     return () => unsubscribe();
   }, [loadProjects, selectProject]);
 
+  // Real-time automatic live synchronization (SSE instantaneous push + version-aware polling fallback)
+  useEffect(() => {
+    if (!activeProjectId) return;
+
+    let isSubscribed = true;
+    let eventSource: EventSource | null = null;
+
+    const fetchLatestData = async () => {
+      // Don't interrupt modal edit if user has item open
+      if (editingItem !== null) return;
+      try {
+        const emailParam = (currentUser?.email || '').toLowerCase().trim();
+        const url = emailParam
+          ? `/api/projects/${activeProjectId}?userEmail=${encodeURIComponent(emailParam)}`
+          : `/api/projects/${activeProjectId}`;
+        const fullRes = await fetch(url, { cache: 'no-store' });
+        if (!fullRes.ok) return;
+        const fullData = await fullRes.json();
+        if (isSubscribed && fullData && fullData.success && fullData.project) {
+          setProject(fullData.project);
+          setRooms(fullData.project.rooms || []);
+          if (fullData.project.categories && fullData.project.categories.length > 0) {
+            setCategories(fullData.project.categories);
+          }
+          setItems(fullData.items || []);
+          setLastSyncedTime(new Date());
+          setSyncStatus('synced');
+        }
+      } catch (err) {
+        console.warn('Failed to fetch latest project data:', err);
+      }
+    };
+
+    // 1. Establish SSE Connection for instant push
+    try {
+      eventSource = new EventSource(`/api/projects/${activeProjectId}/stream`);
+      eventSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (
+            payload.type === 'sync' ||
+            payload.type === 'project_updated' ||
+            payload.type === 'members_updated'
+          ) {
+            fetchLatestData();
+          }
+        } catch {
+          // ignore heartbeat
+        }
+      };
+      eventSource.onerror = () => {
+        // SSE disconnected, fallback polling continues
+      };
+    } catch {
+      // SSE not available
+    }
+
+    // 2. Resilient version-aware polling check
+    const checkVersion = async () => {
+      if (document.visibilityState !== 'visible' || editingItem !== null) return;
+      try {
+        const res = await fetch(`/api/projects/${activeProjectId}/version`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && data.success) {
+          const serverVer = data.version;
+          const currentVer = project.version;
+          const needsRefresh =
+            (serverVer !== undefined && currentVer !== undefined && serverVer > currentVer) ||
+            (data.updatedAt && project.updatedAt && data.updatedAt !== project.updatedAt) ||
+            (data.itemsCount !== undefined && items.length !== data.itemsCount);
+
+          if (needsRefresh) {
+            await fetchLatestData();
+          }
+        }
+      } catch {
+        // Background polling error ignored
+      }
+    };
+
+    const intervalId = setInterval(checkVersion, 2500);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        checkVersion();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      isSubscribed = false;
+      if (eventSource) {
+        eventSource.close();
+      }
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [activeProjectId, project.updatedAt, project.version, items.length, editingItem]);
+
   // Online Auto-save / Sync helper
   const syncWithServer = useCallback(
     async (updatedProject: Project, updatedItems: SpecificationItem[]) => {
       setSyncStatus('syncing');
       try {
-        await fetch(`/api/projects/${updatedProject.id}/sync`, {
+        const res = await fetch(`/api/projects/${updatedProject.id}/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -231,6 +431,14 @@ export default function App() {
             items: updatedItems,
           }),
         });
+        const data = await res.json();
+        if (data && data.success) {
+          setProject((prev) => ({
+            ...prev,
+            updatedAt: data.updatedAt,
+            version: data.version,
+          }));
+        }
         setSyncStatus('synced');
         setLastSyncedTime(new Date());
       } catch (err) {
@@ -330,6 +538,109 @@ export default function App() {
       ...prev,
       members: (prev.members || []).filter((m) => m.email.toLowerCase() !== email.toLowerCase()),
     }));
+  };
+
+  const handleChangeMemberRole = async (email: string, role: UserRole) => {
+    try {
+      const res = await fetch(`/api/projects/${project.id}/members`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, role }),
+      });
+      const data = await res.json();
+      if (data.success && data.members) {
+        setProject((prev) => ({
+          ...prev,
+          members: data.members,
+          userRoleInProject:
+            currentUser.email.toLowerCase() === email.toLowerCase() ? role : prev.userRoleInProject,
+        }));
+        if (currentUser.email.toLowerCase() === email.toLowerCase()) {
+          setCurrentUser((prev) => ({
+            ...prev,
+            role,
+            roleTitle:
+              role === 'team'
+                ? isRealAdmin ? 'Администратор (Владелец)' : 'Команда (Редактор)'
+                : role === 'contractor'
+                ? 'Поставщик / Подрядчик'
+                : 'Заказчик дизайн-проекта',
+          }));
+        }
+        // Also refresh project list for current user
+        if (currentUser?.email) {
+          loadProjects(currentUser.email);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to change member role:', err);
+    }
+  };
+
+  // --- Supplier Q&A Handlers (Visible only for Team and Contractor) ---
+  const handleAddSupplierQuestion = async (itemId: string, text: string) => {
+    const newQuestion: SupplierQuestion = {
+      id: 'sq-' + Date.now(),
+      author: currentUser.name || currentUser.email || (currentUser.role === 'contractor' ? 'Поставщик' : 'Команда'),
+      role: currentUser.role === 'contractor' ? 'contractor' : 'team',
+      text,
+      createdAt: new Date().toISOString(),
+      resolved: false,
+    };
+
+    const nextItems = items.map((it) => {
+      if (it.id === itemId) {
+        const existing = it.supplierQuestions || [];
+        return {
+          ...it,
+          supplierQuestions: [...existing, newQuestion],
+        };
+      }
+      return it;
+    });
+
+    setItems(nextItems);
+    if (supplierQuestionsItem && supplierQuestionsItem.id === itemId) {
+      setSupplierQuestionsItem((prev) =>
+        prev
+          ? {
+              ...prev,
+              supplierQuestions: [...(prev.supplierQuestions || []), newQuestion],
+            }
+          : null
+      );
+    }
+
+    await syncWithServer(project, nextItems);
+  };
+
+  const handleToggleResolveSupplierQuestion = async (itemId: string, questionId: string) => {
+    const nextItems = items.map((it) => {
+      if (it.id === itemId) {
+        const existing = it.supplierQuestions || [];
+        const updated = existing.map((q) =>
+          q.id === questionId ? { ...q, resolved: !q.resolved } : q
+        );
+        return {
+          ...it,
+          supplierQuestions: updated,
+        };
+      }
+      return it;
+    });
+
+    setItems(nextItems);
+    if (supplierQuestionsItem && supplierQuestionsItem.id === itemId) {
+      setSupplierQuestionsItem((prev) => {
+        if (!prev) return null;
+        const updated = (prev.supplierQuestions || []).map((q) =>
+          q.id === questionId ? { ...q, resolved: !q.resolved } : q
+        );
+        return { ...prev, supplierQuestions: updated };
+      });
+    }
+
+    await syncWithServer(project, nextItems);
   };
 
   // --- Auth Handlers ---
@@ -605,10 +916,13 @@ export default function App() {
         user={currentUser}
         projectsCount={projects.length}
         syncStatus={syncStatus}
+        isAdmin={isAdmin}
+        isRealAdmin={isRealAdmin}
+        simulatedRole={simulatedRole}
+        onSetSimulatedRole={(role) => setSimulatedRole(role)}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         onOpenProjectSwitcher={() => setIsProjectSwitcherOpen(true)}
         onOpenInvite={() => setIsInviteModalOpen(true)}
-        onOpenGoogleDrive={() => setIsGoogleDriveOpen(true)}
         onOpenAuth={() => setIsAuthModalOpen(true)}
         onOpenRooms={() => setIsRoomsModalOpen(true)}
         onExportPdf={handleExportPdf}
@@ -619,95 +933,206 @@ export default function App() {
         onToggleTheme={() => setIsDarkMode(!isDarkMode)}
       />
 
+      {/* Role simulation indicator banner for Administrator */}
+      {isRealAdmin && simulatedRole && (
+        <div className="border-b px-4 py-2.5 bg-amber-500/15 border-amber-500/30 text-amber-200">
+          <div className="max-w-[1700px] mx-auto flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="px-2 py-0.5 rounded font-bold uppercase tracking-wider text-[10px] bg-amber-500 text-slate-950">
+                Режим симуляции
+              </span>
+              <span>
+                Вы просматриваете проект глазами{' '}
+                <strong>
+                  {simulatedRole === 'client' ? 'Заказчика (Клиента)' : 'Поставщика / Подрядчика'}
+                </strong>
+                . Закупочные скидки и кнопки управления скрыты.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSimulatedRole(null)}
+              className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs cursor-pointer shadow transition-all"
+            >
+              Вернуться в режим Администратора
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Member identity banner for non-admin team, client or contractor */}
+      {!isRealAdmin && (
+        <div
+          className={`border-b px-4 py-2 transition-colors ${
+            effectiveRole === 'contractor'
+              ? 'bg-sky-500/10 border-sky-500/20 text-sky-200'
+              : effectiveRole === 'client'
+              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200'
+              : 'bg-amber-500/10 border-amber-500/20 text-amber-200'
+          }`}
+        >
+          <div className="max-w-[1700px] mx-auto flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span
+                className={`px-2 py-0.5 rounded font-bold uppercase tracking-wider text-[10px] ${
+                  effectiveRole === 'contractor'
+                    ? 'bg-sky-500 text-slate-950'
+                    : effectiveRole === 'client'
+                    ? 'bg-emerald-500 text-slate-950'
+                    : 'bg-amber-500 text-slate-950'
+                }`}
+              >
+                {effectiveRole === 'team'
+                  ? 'Команда'
+                  : effectiveRole === 'contractor'
+                  ? 'Поставщик'
+                  : 'Заказчик'}
+              </span>
+              <span>
+                Вы авторизованы как <strong>{currentUser.email}</strong> • Проект: <strong>{project.name}</strong>
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Container */}
       <main className="max-w-[1700px] mx-auto px-3 sm:px-6 py-4 space-y-4">
-        {/* Project Hero / Overview */}
-        <ProjectHero
-          project={project}
-          items={items}
-          userRole={currentUser.role}
-          isDarkMode={isDarkMode}
-          onOpenAddItem={() => handleOpenAddItem()}
-        />
+        {!hasProjectAccess ? (
+          <div className="max-w-lg mx-auto my-16 p-8 rounded-2xl border bg-[#0f172a] border-slate-800 text-center space-y-6 shadow-2xl">
+            <div className="w-16 h-16 rounded-2xl bg-amber-500/10 text-amber-500 border border-amber-500/20 flex items-center justify-center mx-auto">
+              <ShieldAlert className="w-8 h-8" />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-xl font-bold text-white">Доступ ожидает подтверждения</h2>
+              <p className="text-sm text-slate-300">
+                Вы вошли как <span className="font-mono font-bold text-amber-400">{currentUser.email}</span>.
+              </p>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Администратор проекта (<strong>{project?.ownerEmail || 'Vladislav Churikov'}</strong>) ещё не добавил вашу почту в список участников проекта «<strong>{project.name}</strong>».
+              </p>
+            </div>
 
-        {/* Filter Toolbar */}
-        <FilterToolbar
-          rooms={rooms}
-          categories={categories}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          groupBy={groupBy}
-          onGroupByChange={setGroupBy}
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          selectedRoom={selectedRoom}
-          onRoomChange={setSelectedRoom}
-          selectedCategory={selectedCategory}
-          onCategoryChange={setSelectedCategory}
-          selectedStatus={selectedStatus}
-          onStatusChange={setSelectedStatus}
-          onlyWithDiscount={onlyWithDiscount}
-          onDiscountToggle={() => setOnlyWithDiscount(!onlyWithDiscount)}
-          totalFilteredCount={filteredItems.length}
-          totalItemsCount={items.length}
-          isDarkMode={isDarkMode}
-          onOpenAddItem={() => handleOpenAddItem()}
-          userRole={currentUser.role}
-        />
+            <div className="p-4 rounded-xl bg-[#141c2b] border border-slate-700/60 text-left text-xs text-slate-300 space-y-2">
+              <div className="font-bold text-amber-400 flex items-center gap-1.5">
+                <Info className="w-4 h-4" /> Что делать:
+              </div>
+              <p className="text-slate-400">
+                Попросите администратора добавить ваш email <code className="text-slate-200 bg-slate-800 px-1.5 py-0.5 rounded">{currentUser.email}</code> в разделе <strong>«Доступ и роли»</strong> с назначением роли (Заказчик, Поставщик или Команда).
+              </p>
+            </div>
 
-        {/* Primary Views */}
-        {viewMode === 'table' && (
-          <TableView
-            items={filteredItems}
-            rooms={rooms}
-            groupBy={groupBy}
-            userRole={currentUser.role}
-            isDarkMode={isDarkMode}
-            onEditItem={handleOpenEditItem}
-            onDeleteItem={handleDeleteItem}
-            onStatusChange={handleStatusChange}
-            onClientStatusChange={handleClientStatusChange}
-            onQuantityChange={handleQuantityChange}
-            onOpenLightbox={handleOpenLightbox}
-            onOpenQr={handleOpenQr}
-            onAddItemInGroup={(roomId) => handleOpenAddItem(roomId)}
-          />
-        )}
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => selectProject(activeProjectId)}
+                className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-2 transition-all shadow cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Проверить доступ
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsAuthModalOpen(true)}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-all cursor-pointer"
+              >
+                Сменить аккаунт
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Project Hero / Overview */}
+            <ProjectHero
+              project={project}
+              items={items}
+              userRole={currentUser.role}
+              isDarkMode={isDarkMode}
+              onOpenAddItem={() => handleOpenAddItem()}
+            />
 
-        {viewMode === 'cards' && (
-          <CardsView
-            items={filteredItems}
-            rooms={rooms}
-            groupBy={groupBy}
-            userRole={currentUser.role}
-            isDarkMode={isDarkMode}
-            onEditItem={handleOpenEditItem}
-            onDeleteItem={handleDeleteItem}
-            onStatusChange={handleStatusChange}
-            onClientStatusChange={handleClientStatusChange}
-            onQuantityChange={handleQuantityChange}
-            onOpenPhoto={handleOpenLightbox}
-            onOpenLightbox={handleOpenLightbox}
-            onOpenQr={handleOpenQr}
-            onAddItemInGroup={(roomId) => handleOpenAddItem(roomId)}
-          />
-        )}
+            {/* Filter Toolbar */}
+            <FilterToolbar
+              rooms={rooms}
+              categories={categories}
+              viewMode={viewMode}
+              onViewModeChange={setViewMode}
+              groupBy={groupBy}
+              onGroupByChange={setGroupBy}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              selectedRoom={selectedRoom}
+              onRoomChange={setSelectedRoom}
+              selectedCategory={selectedCategory}
+              onCategoryChange={setSelectedCategory}
+              selectedStatus={selectedStatus}
+              onStatusChange={setSelectedStatus}
+              onlyWithDiscount={onlyWithDiscount}
+              onDiscountToggle={() => setOnlyWithDiscount(!onlyWithDiscount)}
+              totalFilteredCount={filteredItems.length}
+              totalItemsCount={items.length}
+              isDarkMode={isDarkMode}
+              onOpenAddItem={() => handleOpenAddItem()}
+              userRole={currentUser.role}
+            />
 
-        {viewMode === 'summary' && (
-          <SummaryView
-            project={project}
-            items={items}
-            rooms={rooms}
-            isDarkMode={isDarkMode}
-            onSelectRoom={(roomId) => {
-              setSelectedRoom(roomId);
-              setViewMode('table');
-            }}
-            onSelectCategory={(cat) => {
-              setSelectedCategory(cat);
-              setViewMode('table');
-            }}
-          />
+            {/* Primary Views */}
+            {viewMode === 'table' && (
+              <TableView
+                items={filteredItems}
+                rooms={rooms}
+                groupBy={groupBy}
+                userRole={currentUser.role}
+                isDarkMode={isDarkMode}
+                onEditItem={handleOpenEditItem}
+                onDeleteItem={handleDeleteItem}
+                onStatusChange={handleStatusChange}
+                onClientStatusChange={handleClientStatusChange}
+                onQuantityChange={handleQuantityChange}
+                onOpenLightbox={handleOpenLightbox}
+                onOpenQr={handleOpenQr}
+                onOpenSupplierQuestions={(item) => setSupplierQuestionsItem(item)}
+                onAddItemInGroup={(roomId) => handleOpenAddItem(roomId)}
+              />
+            )}
+
+            {viewMode === 'cards' && (
+              <CardsView
+                items={filteredItems}
+                rooms={rooms}
+                groupBy={groupBy}
+                userRole={currentUser.role}
+                isDarkMode={isDarkMode}
+                onEditItem={handleOpenEditItem}
+                onDeleteItem={handleDeleteItem}
+                onStatusChange={handleStatusChange}
+                onClientStatusChange={handleClientStatusChange}
+                onQuantityChange={handleQuantityChange}
+                onOpenPhoto={handleOpenLightbox}
+                onOpenLightbox={handleOpenLightbox}
+                onOpenQr={handleOpenQr}
+                onOpenSupplierQuestions={(item) => setSupplierQuestionsItem(item)}
+                onAddItemInGroup={(roomId) => handleOpenAddItem(roomId)}
+              />
+            )}
+
+            {viewMode === 'summary' && (
+              <SummaryView
+                project={project}
+                items={items}
+                rooms={rooms}
+                isDarkMode={isDarkMode}
+                onSelectRoom={(roomId) => {
+                  setSelectedRoom(roomId);
+                  setViewMode('table');
+                }}
+                onSelectCategory={(cat) => {
+                  setSelectedCategory(cat);
+                  setViewMode('table');
+                }}
+              />
+            )}
+          </>
         )}
       </main>
 
@@ -737,29 +1162,13 @@ export default function App() {
       />
 
       <InviteMemberModal
-        isOpen={isInviteModalOpen}
+        isOpen={isInviteModalOpen && isAdmin}
         onClose={() => setIsInviteModalOpen(false)}
         project={project}
         onInviteMember={handleInviteMember}
         onRemoveMember={handleRemoveMember}
+        onChangeMemberRole={handleChangeMemberRole}
         currentUserEmail={currentUser.email}
-        isDarkMode={isDarkMode}
-      />
-
-      <GoogleDriveSyncModal
-        isOpen={isGoogleDriveOpen}
-        onClose={() => setIsGoogleDriveOpen(false)}
-        project={project}
-        items={items}
-        accessToken={accessToken}
-        currentUserEmail={currentUser.email}
-        onLoginGoogle={handleGoogleSignIn}
-        onRestoreFromBackup={(restoredProj, restoredItems) => {
-          setProject(restoredProj);
-          setItems(restoredItems);
-          setRooms(restoredProj.rooms || []);
-          syncWithServer(restoredProj, restoredItems);
-        }}
         isDarkMode={isDarkMode}
       />
 
@@ -875,6 +1284,18 @@ export default function App() {
         item={itemToDelete}
         onConfirm={handleConfirmDelete}
         onCancel={() => setItemToDelete(null)}
+        isDarkMode={isDarkMode}
+      />
+
+      <SupplierQuestionsModal
+        isOpen={!!supplierQuestionsItem}
+        onClose={() => setSupplierQuestionsItem(null)}
+        item={supplierQuestionsItem}
+        userRole={currentUser.role}
+        currentUserName={currentUser.name}
+        onAddQuestion={handleAddSupplierQuestion}
+        onToggleResolve={handleToggleResolveSupplierQuestion}
+        onStatusChange={(itemId, newStatus) => handleStatusChange(itemId, newStatus)}
         isDarkMode={isDarkMode}
       />
     </div>
