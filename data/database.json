@@ -94,12 +94,20 @@
           "role": "contractor",
           "status": "active",
           "invitedAt": "2026-09-17T10:46:27.167Z"
+        },
+        {
+          "id": "mem-1789761178392-5eaa",
+          "email": "newuser@test.kz",
+          "role": "client",
+          "status": "active",
+          "invitedAt": "2026-09-18T19:52:58.392Z",
+          "acceptedAt": "2026-09-18T19:52:58.392Z"
         }
       ],
       "status": "active",
       "createdAt": "2026-09-17T08:24:32.874Z",
-      "updatedAt": "2026-09-18T19:35:15.410Z",
-      "version": 22,
+      "updatedAt": "2026-09-18T19:52:58.392Z",
+      "version": 23,
       "userRoleInProject": "team"
     },
     "proj-2": {
@@ -460,5 +468,50 @@
       "status": "pending",
       "createdAt": "2026-09-18T18:40:39.652Z"
     }
+  },
+  "sessions": {
+    "1c90a3a1-5af1-4d86-aa0c-3d12dc0ce064-mu7dlcxa": {
+      "token": "1c90a3a1-5af1-4d86-aa0c-3d12dc0ce064-mu7dlcxa",
+      "email": "wl.chvlad@gmail.com",
+      "role": "team",
+      "isAdmin": true,
+      "createdAt": "2026-09-18T19:52:54.958Z"
+    },
+    "133e3dcc-e9ae-419b-96a8-2e4ad0244ee2-mu7dlcy4": {
+      "token": "133e3dcc-e9ae-419b-96a8-2e4ad0244ee2-mu7dlcy4",
+      "email": "client@complspec.kz",
+      "role": "client",
+      "isAdmin": false,
+      "projectId": "proj-1",
+      "createdAt": "2026-09-18T19:52:54.988Z"
+    },
+    "bc61eae5-fdf2-4820-90a5-05c9583f1fbe-mu7dlfl7": {
+      "token": "bc61eae5-fdf2-4820-90a5-05c9583f1fbe-mu7dlfl7",
+      "email": "newuser@test.kz",
+      "role": "client",
+      "isAdmin": false,
+      "projectId": "proj-1",
+      "createdAt": "2026-09-18T19:52:58.411Z"
+    },
+    "be64ba53-46a6-4612-a425-dac305363062-mu7dlugh": {
+      "token": "be64ba53-46a6-4612-a425-dac305363062-mu7dlugh",
+      "email": "wl.chvlad@gmail.com",
+      "role": "team",
+      "isAdmin": true,
+      "createdAt": "2026-09-18T19:53:17.681Z"
+    }
+  },
+  "accessRequests": {
+    "proj-1": [
+      {
+        "id": "req-1789761178356-u4qg",
+        "projectId": "proj-1",
+        "email": "newuser@test.kz",
+        "status": "approved",
+        "createdAt": "2026-09-18T19:52:58.356Z",
+        "role": "client",
+        "resolvedAt": "2026-09-18T19:52:58.392Z"
+      }
+    ]
   }
 }

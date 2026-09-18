@@ -5,6 +5,7 @@ import { EmailExportModal } from './components/EmailExportModal';
 import { FilterToolbar, GroupByMode, ViewMode } from './components/FilterToolbar';
 import { Header } from './components/Header';
 import { ItemModal } from './components/ItemModal';
+import { LoginScreen } from './components/LoginScreen';
 import { PhotoLightbox } from './components/PhotoLightbox';
 import { ProjectHero } from './components/ProjectHero';
 import { ProjectSettingsModal } from './components/ProjectSettingsModal';
@@ -15,7 +16,6 @@ import { SummaryView } from './components/SummaryView';
 import { TableView } from './components/TableView';
 import { ProjectSwitcherModal } from './components/ProjectSwitcherModal';
 import { InviteMemberModal } from './components/InviteMemberModal';
-import { AuthModal } from './components/AuthModal';
 import { ConfirmDeleteModal } from './components/ConfirmDeleteModal';
 import { SupplierQuestionsModal } from './components/SupplierQuestionsModal';
 import { ShieldAlert, Info, RefreshCw } from 'lucide-react';
@@ -41,13 +41,7 @@ import {
 import { exportSpecificationToExcel } from './utils/exportExcel';
 import { exportSpecificationToPdf } from './utils/exportPdf';
 import { calcItemTotal, CATEGORIES } from './utils/formatters';
-import {
-  initAuth,
-  googleSignIn,
-  logoutGoogle,
-  getAccessToken,
-  setCachedAccessToken,
-} from './utils/firebaseAuth';
+import { checkSession, logout as authLogout, getAccessRequests, approveAccessRequest, rejectAccessRequest } from './utils/auth';
 import { extractUrlParams } from './utils/linkUtils';
 
 export default function App() {
@@ -65,7 +59,9 @@ export default function App() {
 
   // 2. User & Auth State
   const [currentUser, setCurrentUser] = useState<UserProfile>(MOCK_USER_TEAM);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
 
   // 3. UI and Sync State
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -86,7 +82,6 @@ export default function App() {
   // 5. Modals State
   const [isProjectSwitcherOpen, setIsProjectSwitcherOpen] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<SpecificationItem | null>(null);
@@ -109,14 +104,10 @@ export default function App() {
   const [supplierQuestionsItem, setSupplierQuestionsItem] = useState<SpecificationItem | null>(null);
   const [simulatedRole, setSimulatedRole] = useState<UserRole | null>(null);
 
-  // 1. Is this user the project owner or supreme admin?
+  // 1. Is this user the admin (logged in via admin login with password)?
   const isRealAdmin = useMemo(() => {
-    const userEmail = (currentUser?.email || '').toLowerCase().trim();
-    const ownerEmail = (project?.ownerEmail || '').toLowerCase().trim();
-    if (userEmail === 'wl.chvlad@gmail.com') return true;
-    if (ownerEmail && userEmail === ownerEmail) return true;
-    return false;
-  }, [currentUser?.email, project?.ownerEmail]);
+    return currentUser?.isAdmin === true;
+  }, [currentUser?.isAdmin]);
 
   // 2. What role is assigned to this user in project.members or project.userRoleInProject?
   const assignedMemberRole = useMemo<UserRole | null>(() => {
@@ -142,12 +133,8 @@ export default function App() {
   const hasProjectAccess = useMemo(() => {
     if (isRealAdmin) return true;
     if (assignedMemberRole !== null) return true;
-    const userEmail = (currentUser?.email || '').toLowerCase().trim();
-    if (!userEmail || userEmail === 'demo@complspec.kz' || userEmail === 'wl.chvlad@gmail.com') {
-      return true;
-    }
     return false;
-  }, [isRealAdmin, assignedMemberRole, currentUser?.email]);
+  }, [isRealAdmin, assignedMemberRole]);
 
   // 4. Effective role for UI view
   const effectiveRole: UserRole = useMemo(() => {
@@ -228,96 +215,97 @@ export default function App() {
     }
   }, [currentUser?.email]);
 
-  // Initialize Firebase Auth listener
+  // Load pending access requests for admin
+  const loadPendingRequests = useCallback(async (projectId: string) => {
+    try {
+      const requests = await getAccessRequests(projectId);
+      setPendingRequests(requests);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Check session on mount
   useEffect(() => {
     const { projectId: projectParam } = extractUrlParams();
 
-    const unsubscribe = initAuth(
-      async (firebaseUser, token) => {
-        setAccessToken(token);
-        if (token) setCachedAccessToken(token);
+    const init = async () => {
+      const sessionUser = await checkSession();
+      if (sessionUser) {
+        setIsAuthenticated(true);
+        const roleTitle =
+          sessionUser.role === 'team'
+            ? 'Администратор (Владелец)'
+            : sessionUser.role === 'contractor'
+            ? 'Поставщик / Подрядчик'
+            : 'Заказчик дизайн-проекта';
 
-        const email = (firebaseUser.email || '').toLowerCase().trim();
-        const name = firebaseUser.displayName || email.split('@')[0];
-        const avatar = firebaseUser.photoURL || '';
+        setCurrentUser({
+          id: sessionUser.email,
+          name: sessionUser.email.split('@')[0],
+          email: sessionUser.email,
+          avatar: '',
+          role: sessionUser.role,
+          roleTitle,
+          isAdmin: sessionUser.isAdmin,
+        });
 
-        try {
-          const res = await fetch('/api/auth/user', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              id: firebaseUser.uid,
-              email: firebaseUser.email,
-              name,
-              avatar,
-            }),
-          });
-          const authData = await res.json();
-          const confirmedUser = authData.success && authData.user ? authData.user : {
-            id: firebaseUser.uid,
-            name,
-            email,
-            avatar,
-          };
-
-          // 1. Fetch user's projects list first to immediately know assigned roles
-          const userProjs = await loadProjects(confirmedUser.email);
-          let targetProjId = projectParam;
-          let initialRole: UserRole = 'team';
-
+        if (sessionUser.isAdmin) {
+          const userProjs = await loadProjects(sessionUser.email);
           if (userProjs && userProjs.length > 0) {
             const targetProj = projectParam
               ? userProjs.find((p: Project) => p.id === projectParam) || userProjs[0]
               : userProjs[0];
-            targetProjId = targetProj.id;
-            if (targetProj.userRoleInProject) {
-              initialRole = targetProj.userRoleInProject;
-            }
+            await selectProject(targetProj.id, sessionUser.email);
           }
-
-          const isUserAdmin =
-            confirmedUser.email.toLowerCase() === 'wl.chvlad@gmail.com' ||
-            (project?.ownerEmail && confirmedUser.email.toLowerCase() === project.ownerEmail.toLowerCase());
-          const finalRole = isUserAdmin ? 'team' : initialRole;
-
-          setCurrentUser({
-            id: confirmedUser.id,
-            name: confirmedUser.name,
-            email: confirmedUser.email,
-            avatar: confirmedUser.avatar || avatar,
-            role: finalRole,
-            roleTitle:
-              finalRole === 'team'
-                ? isUserAdmin ? 'Администратор (Владелец)' : 'Команда (Редактор)'
-                : finalRole === 'contractor'
-                ? 'Поставщик / Подрядчик'
-                : 'Заказчик дизайн-проекта',
-            isGoogleUser: true,
-          });
-
-          // 2. Select project with user email passed to populate full role & items
-          if (targetProjId) {
-            await selectProject(targetProjId, confirmedUser.email);
-          }
-        } catch (err) {
-          console.warn('Failed to sync user with server:', err);
+        } else if (sessionUser.projectId) {
+          await selectProject(sessionUser.projectId, sessionUser.email);
         }
-      },
-      () => {
-        // Logged out / unauthenticated fallback
-        loadProjects().then((projs) => {
-          if (projs && projs.length > 0) {
-            const targetProj = projectParam
-              ? projs.find((p: Project) => p.id === projectParam) || projs[0]
-              : projs[0];
-            selectProject(targetProj.id);
-          }
-        });
+      } else {
+        setIsAuthenticated(false);
       }
-    );
+      setIsAuthLoading(false);
+    };
 
-    return () => unsubscribe();
+    init();
   }, [loadProjects, selectProject]);
+
+  // Handle login success from LoginScreen
+  const handleLoginSuccess = async (user: { email: string; role: UserRole; isAdmin: boolean; projectId?: string }) => {
+    setIsAuthenticated(true);
+    const roleTitle =
+      user.role === 'team'
+        ? 'Администратор (Владелец)'
+        : user.role === 'contractor'
+        ? 'Поставщик / Подрядчик'
+        : 'Заказчик дизайн-проекта';
+
+    setCurrentUser({
+      id: user.email,
+      name: user.email.split('@')[0],
+      email: user.email,
+      avatar: '',
+      role: user.role,
+      roleTitle,
+      isAdmin: user.isAdmin,
+    });
+
+    if (user.isAdmin) {
+      const userProjs = await loadProjects(user.email);
+      if (userProjs && userProjs.length > 0) {
+        await selectProject(userProjs[0].id, user.email);
+      }
+    } else if (user.projectId) {
+      await selectProject(user.projectId, user.email);
+    }
+  };
+
+  // Load pending access requests when admin opens a project
+  useEffect(() => {
+    if (isAuthenticated && isRealAdmin && activeProjectId) {
+      loadPendingRequests(activeProjectId);
+    }
+  }, [isAuthenticated, isRealAdmin, activeProjectId, loadPendingRequests]);
 
   // Real-time automatic live synchronization (SSE instantaneous push + version-aware polling fallback)
   useEffect(() => {
@@ -361,9 +349,11 @@ export default function App() {
           if (
             payload.type === 'sync' ||
             payload.type === 'project_updated' ||
-            payload.type === 'members_updated'
+            payload.type === 'members_updated' ||
+            payload.type === 'access_request'
           ) {
             fetchLatestData();
+            if (isRealAdmin) loadPendingRequests(activeProjectId);
           }
         } catch {
           // ignore heartbeat
@@ -644,77 +634,24 @@ export default function App() {
   };
 
   // --- Auth Handlers ---
-  const handleGoogleSignIn = async () => {
-    const { user: fbUser, accessToken: token } = await googleSignIn();
-    setAccessToken(token);
-    setCachedAccessToken(token);
-
-    const res = await fetch('/api/auth/user', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: fbUser.uid,
-        email: fbUser.email,
-        name: fbUser.displayName,
-        avatar: fbUser.photoURL,
-      }),
-    });
-    const data = await res.json();
-    if (data.success && data.user) {
-      setCurrentUser({
-        id: data.user.id,
-        name: data.user.name,
-        email: data.user.email,
-        avatar: data.user.avatar || fbUser.photoURL || '',
-        role: 'team',
-        roleTitle: 'Дизайнер / Владелец',
-        isGoogleUser: true,
-      });
-
-      const userProjs = await loadProjects(data.user.email);
-      if (userProjs && userProjs.length > 0) {
-        await selectProject(userProjs[0].id);
-      }
-    }
-  };
-
-  const handleManualSignIn = async (email: string, name: string) => {
-    const res = await fetch('/api/auth/user', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: `user-${Date.now()}`,
-        email,
-        name,
-      }),
-    });
-    const data = await res.json();
-    if (data.success && data.user) {
-      setCurrentUser({
-        id: data.user.id,
-        name: data.user.name,
-        email: data.user.email,
-        avatar: '',
-        role: 'team',
-        roleTitle: 'Дизайнер / Комплектатор',
-        isGoogleUser: false,
-      });
-
-      const userProjs = await loadProjects(data.user.email);
-      if (userProjs && userProjs.length > 0) {
-        await selectProject(userProjs[0].id);
-      }
-    }
-  };
-
   const handleSignOut = async () => {
-    await logoutGoogle();
-    setAccessToken(null);
+    await authLogout();
+    setIsAuthenticated(false);
     setCurrentUser(MOCK_USER_TEAM);
-    const defaultProjs = await loadProjects();
-    if (defaultProjs && defaultProjs.length > 0) {
-      await selectProject(defaultProjs[0].id);
-    }
+    setPendingRequests([]);
+  };
+
+  // --- Access Request Handlers ---
+  const handleApproveRequest = async (requestId: string, role: UserRole) => {
+    await approveAccessRequest(project.id, requestId, role);
+    await loadPendingRequests(project.id);
+    // Refresh project to get updated members
+    await selectProject(project.id, currentUser.email);
+  };
+
+  const handleRejectRequest = async (requestId: string) => {
+    await rejectAccessRequest(project.id, requestId);
+    await loadPendingRequests(project.id);
   };
 
   // --- Items CRUD Handlers ---
@@ -904,6 +841,26 @@ export default function App() {
     });
   }, [items, selectedRoom, selectedCategory, selectedStatus, onlyWithDiscount, searchQuery]);
 
+  const { projectId: urlProjectId } = extractUrlParams();
+
+  if (isAuthLoading) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center ${isDarkMode ? 'bg-[#0a0e17]' : 'bg-slate-50'}`}>
+        <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <LoginScreen
+        projectId={urlProjectId}
+        onLoginSuccess={handleLoginSuccess}
+        isDarkMode={isDarkMode}
+      />
+    );
+  }
+
   return (
     <div
       className={`min-h-screen transition-colors duration-200 ${
@@ -923,7 +880,7 @@ export default function App() {
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         onOpenProjectSwitcher={() => setIsProjectSwitcherOpen(true)}
         onOpenInvite={() => setIsInviteModalOpen(true)}
-        onOpenAuth={() => setIsAuthModalOpen(true)}
+        onSignOut={handleSignOut}
         onOpenRooms={() => setIsRoomsModalOpen(true)}
         onExportPdf={handleExportPdf}
         onExportExcel={handleExportExcel}
@@ -1170,16 +1127,9 @@ export default function App() {
         onChangeMemberRole={handleChangeMemberRole}
         currentUserEmail={currentUser.email}
         isDarkMode={isDarkMode}
-      />
-
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        currentUser={currentUser}
-        onGoogleSignIn={handleGoogleSignIn}
-        onManualSignIn={handleManualSignIn}
-        onSignOut={handleSignOut}
-        isDarkMode={isDarkMode}
+        pendingRequests={pendingRequests}
+        onApproveRequest={handleApproveRequest}
+        onRejectRequest={handleRejectRequest}
       />
 
       <ItemModal

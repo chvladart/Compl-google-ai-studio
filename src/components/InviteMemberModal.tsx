@@ -11,6 +11,7 @@ import {
   X,
   CheckCircle2,
   AlertCircle,
+  Clock,
   Info,
 } from 'lucide-react';
 
@@ -23,6 +24,9 @@ interface InviteMemberModalProps {
   onChangeMemberRole?: (email: string, role: UserRole) => Promise<void>;
   currentUserEmail?: string;
   isDarkMode?: boolean;
+  pendingRequests?: any[];
+  onApproveRequest?: (requestId: string, role: UserRole) => Promise<void>;
+  onRejectRequest?: (requestId: string) => Promise<void>;
 }
 
 export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
@@ -34,6 +38,9 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
   onChangeMemberRole,
   currentUserEmail,
   isDarkMode = true,
+  pendingRequests = [],
+  onApproveRequest,
+  onRejectRequest,
 }) => {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<UserRole>('client');
@@ -90,7 +97,7 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
       const cleanEmail = email.trim().toLowerCase();
       await onInviteMember(cleanEmail, role);
       setFeedbackMsg({
-        text: `Пользователь ${cleanEmail} успешно добавлен с ролью «${ROLE_CONFIG[role].title}». При входе под этим Google-аккаунтом роль применится автоматически!`,
+        text: `Пользователь ${cleanEmail} добавлен с ролью «${ROLE_CONFIG[role].title}». Отправьте ему ссылку на проект для входа.`,
         type: 'success',
       });
       setEmail('');
@@ -201,7 +208,7 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
             <Info className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
             <div className="text-xs leading-relaxed">
               <strong className="block mb-1 font-bold">Принцип работы доступа по Email:</strong>
-              Внесите Google-почту пользователя в форму ниже и укажите его роль. Когда участник откроет приложение под своей учётной записью, система автоматически применит его роль. Ссылка на приложение общая для всех — никаких отдельных ссылок отправлять не нужно.
+              Внесите email пользователя в форму ниже и укажите его роль. Отправьте пользователю ссылку на проект — он введёт свою почту и получит доступ. Если человек зайдёт по ссылке без добавления, он сможет подать заявку, которую вы увидите здесь.
             </div>
           </div>
 
@@ -272,6 +279,74 @@ export const InviteMemberModal: React.FC<InviteMemberModalProps> = ({
               </div>
             </form>
           </div>
+
+          {/* Section 1b: Pending Access Requests */}
+          {pendingRequests.length > 0 && (
+            <div className="pt-2 border-t border-slate-800 space-y-3">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
+                <Clock className="w-4 h-4 text-sky-400" />
+                Заявки на доступ ({pendingRequests.length})
+              </div>
+              <p className="text-[11px] text-slate-400 -mt-1">
+                Эти пользователи хотят получить доступ к проекту. Подтвердите и назначьте роль.
+              </p>
+              <div className="space-y-2">
+                {pendingRequests.map((req) => (
+                  <div
+                    key={req.id}
+                    className={`p-3 rounded-xl border flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap ${
+                      isDarkMode ? 'bg-sky-500/5 border-sky-500/20' : 'bg-sky-50 border-sky-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-full bg-sky-500 text-slate-950 font-black flex items-center justify-center text-xs shrink-0">
+                        {req.email[0].toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold truncate text-slate-200 font-mono">{req.email}</div>
+                        <p className="text-[11px] text-slate-400">
+                          Заявка: {new Date(req.createdAt).toLocaleString('ru-RU')}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <select
+                        defaultValue="client"
+                        className={`text-xs font-semibold rounded-lg px-2.5 py-1.5 border cursor-pointer focus:outline-none ${
+                          isDarkMode
+                            ? 'bg-[#131d31] border-slate-700 text-white'
+                            : 'bg-slate-50 border-slate-300 text-slate-900'
+                        }`}
+                      >
+                        <option value="client">Заказчик</option>
+                        <option value="contractor">Поставщик</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          const select = (e.target as HTMLElement).closest('div')?.querySelector('select') as HTMLSelectElement;
+                          const role = (select?.value || 'client') as UserRole;
+                          onApproveRequest?.(req.id, role);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 inline mr-1" />
+                        Одобрить
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onRejectRequest?.(req.id)}
+                        className="p-2 rounded-lg text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 transition-colors cursor-pointer"
+                        title="Отклонить заявку"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Section 2: Members List */}
           <div className="pt-2 border-t border-slate-800 space-y-3">

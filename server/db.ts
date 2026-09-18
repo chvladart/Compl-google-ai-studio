@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 
 export interface Room {
   id: string;
@@ -58,11 +59,32 @@ export interface InvitationRecord {
   createdAt: string;
 }
 
+export interface SessionData {
+  token: string;
+  email: string;
+  role: 'team' | 'client' | 'contractor';
+  isAdmin: boolean;
+  projectId?: string;
+  createdAt: string;
+}
+
+export interface AccessRequestRecord {
+  id: string;
+  projectId: string;
+  email: string;
+  status: 'pending' | 'approved' | 'rejected';
+  role?: 'team' | 'client' | 'contractor';
+  createdAt: string;
+  resolvedAt?: string;
+}
+
 export interface DatabaseData {
   users: Record<string, UserRecord>;
   projects: Record<string, ProjectRecord>;
   items: Record<string, any[]>;
   invitations: Record<string, InvitationRecord>;
+  sessions: Record<string, SessionData>;
+  accessRequests: Record<string, AccessRequestRecord[]>;
 }
 
 const DB_DIR = path.join(process.cwd(), 'data');
@@ -364,7 +386,11 @@ class DatabaseManager {
     try {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        // Migrate: ensure new fields exist on older DB files
+        if (!parsed.sessions) parsed.sessions = {};
+        if (!parsed.accessRequests) parsed.accessRequests = {};
+        return parsed;
       }
     } catch (err) {
       console.error('[DB] Failed to load database file, initializing defaults:', err);
@@ -389,6 +415,8 @@ class DatabaseManager {
         'proj-2': INITIAL_PROJECT_2_ITEMS,
       },
       invitations: {},
+      sessions: {},
+      accessRequests: {},
     };
 
     this.saveDirect(initialData);
@@ -443,7 +471,8 @@ class DatabaseManager {
     const cleanEmail = (userEmail || '').toLowerCase().trim();
 
     // Master studio admin/moderator who owns and sees all projects
-    const isMasterAdmin = cleanEmail === 'wl.chvlad@gmail.com';
+    const adminEmail = (process.env.ADMIN_EMAIL || 'wl.chvlad@gmail.com').toLowerCase().trim();
+    const isMasterAdmin = cleanEmail === adminEmail;
 
     return list
       .filter((p) => {
@@ -694,6 +723,118 @@ class DatabaseManager {
         }
       }
     });
+  }
+
+  // --- Sessions ---
+  public createSession(email: string, role: 'team' | 'client' | 'contractor', isAdmin: boolean, projectId?: string): string {
+    const token = crypto.randomUUID() + '-' + Date.now().toString(36);
+    this.data.sessions[token] = {
+      token,
+      email: email.toLowerCase().trim(),
+      role,
+      isAdmin,
+      projectId,
+      createdAt: new Date().toISOString(),
+    };
+    this.save();
+    return token;
+  }
+
+  public getSession(token: string): SessionData | null {
+    return this.data.sessions[token] || null;
+  }
+
+  public deleteSession(token: string): void {
+    delete this.data.sessions[token];
+    this.save();
+  }
+
+  // --- Access Requests ---
+  public createAccessRequest(projectId: string, email: string): { success: boolean; request?: AccessRequestRecord; error?: string } {
+    const project = this.data.projects[projectId];
+    if (!project) return { success: false, error: 'Проект не найден' };
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    // Already a member?
+    if (project.members?.some((m) => m.email.toLowerCase() === cleanEmail)) {
+      return { success: false, error: 'already_member' };
+    }
+
+    // Already pending?
+    if (!this.data.accessRequests[projectId]) this.data.accessRequests[projectId] = [];
+    const existing = this.data.accessRequests[projectId].find(
+      (r) => r.email.toLowerCase() === cleanEmail && r.status === 'pending'
+    );
+    if (existing) {
+      return { success: false, error: 'already_requested' };
+    }
+
+    const request: AccessRequestRecord = {
+      id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      projectId,
+      email: cleanEmail,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+
+    this.data.accessRequests[projectId].push(request);
+    this.save();
+    return { success: true, request };
+  }
+
+  public getAccessRequests(projectId: string): AccessRequestRecord[] {
+    return (this.data.accessRequests[projectId] || []).filter((r) => r.status === 'pending');
+  }
+
+  public approveAccessRequest(projectId: string, requestId: string, role: 'team' | 'client' | 'contractor'): { success: boolean; error?: string } {
+    const requests = this.data.accessRequests[projectId];
+    if (!requests) return { success: false, error: 'Заявки не найдены' };
+
+    const request = requests.find((r) => r.id === requestId);
+    if (!request) return { success: false, error: 'Заявка не найдена' };
+
+    request.status = 'approved';
+    request.role = role;
+    request.resolvedAt = new Date().toISOString();
+
+    // Add email to project members
+    const project = this.data.projects[projectId];
+    if (project) {
+      if (!project.members) project.members = [];
+      const existing = project.members.find((m) => m.email.toLowerCase() === request.email.toLowerCase());
+      if (existing) {
+        existing.role = role;
+        existing.status = 'active';
+      } else {
+        project.members.push({
+          id: `mem-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          email: request.email,
+          role,
+          status: 'active',
+          invitedAt: new Date().toISOString(),
+          acceptedAt: new Date().toISOString(),
+        });
+      }
+      project.updatedAt = new Date().toISOString();
+      project.version = (project.version || 1) + 1;
+    }
+
+    this.save();
+    return { success: true };
+  }
+
+  public rejectAccessRequest(projectId: string, requestId: string): { success: boolean; error?: string } {
+    const requests = this.data.accessRequests[projectId];
+    if (!requests) return { success: false, error: 'Заявки не найдены' };
+
+    const request = requests.find((r) => r.id === requestId);
+    if (!request) return { success: false, error: 'Заявка не найдена' };
+
+    request.status = 'rejected';
+    request.resolvedAt = new Date().toISOString();
+    this.save();
+    return { success: true };
   }
 }
 

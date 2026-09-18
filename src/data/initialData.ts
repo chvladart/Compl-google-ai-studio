@@ -309,6 +309,7 @@ export const INITIAL_USER: UserProfile = {
   role: 'team',
   roleTitle: 'Администратор / Ведущий дизайнер',
   organization: 'COMPLSPEC STUDIO',
+  isAdmin: true,
 };
 
 export const MOCK_USER_TEAM: UserProfile = INITIAL_USER;

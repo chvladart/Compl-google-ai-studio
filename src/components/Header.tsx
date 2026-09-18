@@ -4,6 +4,7 @@ import {
   FileText,
   FolderKanban,
   HardDrive,
+  LogOut,
   Moon,
   Settings,
   ShieldCheck,
@@ -27,7 +28,7 @@ interface HeaderProps {
   onOpenSettings: () => void;
   onOpenProjectSwitcher: () => void;
   onOpenInvite: () => void;
-  onOpenAuth: () => void;
+  onSignOut: () => void;
   onOpenRooms?: () => void;
   onExportPdf: () => void;
   onExportExcel: () => void;
@@ -49,7 +50,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
   onOpenProjectSwitcher,
   onOpenInvite,
-  onOpenAuth,
+  onSignOut,
   onOpenRooms,
   onExportPdf,
   onExportExcel,
@@ -235,15 +236,15 @@ export const Header: React.FC<HeaderProps> = ({
             <span>Excel (₸)</span>
           </button>
 
-          {/* User Account / Auth Modal Trigger */}
+          {/* User Account / Logout */}
           <button
-            onClick={onOpenAuth}
+            onClick={onSignOut}
             className={`flex items-center gap-2 px-2.5 py-1 rounded-lg border text-xs transition-colors cursor-pointer ${
               isDarkMode
-                ? 'bg-[#141c2b] border-sky-800/40 text-sky-200 hover:bg-sky-950/40'
-                : 'bg-sky-50 border-sky-200 text-sky-800 hover:bg-sky-100'
+                ? 'bg-[#141c2b] border-sky-800/40 text-sky-200 hover:bg-rose-950/40 hover:border-rose-800/40 hover:text-rose-200'
+                : 'bg-sky-50 border-sky-200 text-sky-800 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-700'
             }`}
-            title="Личный кабинет и профиль"
+            title="Выйти из системы"
           >
             {user.avatar ? (
               <img
@@ -257,11 +258,11 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             )}
             <div className="text-left hidden sm:block">
-              <span className="block text-[11px] font-bold leading-tight truncate max-w-[100px]">
-                {user.name}
+              <span className="block text-[11px] font-bold leading-tight truncate max-w-[120px]">
+                {user.email}
               </span>
             </div>
-            <ShieldCheck className="w-3.5 h-3.5 text-sky-400" />
+            <LogOut className="w-3.5 h-3.5" />
           </button>
 
           {/* Theme toggle */}

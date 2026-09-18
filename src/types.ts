@@ -104,14 +104,5 @@ export interface UserProfile {
   role: UserRole;
   roleTitle: string;
   organization?: string;
-  isGoogleUser?: boolean;
-}
-
-export interface GoogleDriveBackupFile {
-  id: string;
-  name: string;
-  mimeType: string;
-  modifiedTime: string;
-  size?: string;
-  webViewLink?: string;
+  isAdmin?: boolean;
 }

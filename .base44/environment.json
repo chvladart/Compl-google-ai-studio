@@ -2,5 +2,18 @@
   "previewPort": 3000,
   "healthPath": "/api/health",
   "startCommand": "docker compose -f docker-compose.base44.yml up -d",
-  "secrets": []
+  "secrets": [
+    {
+      "name": "ADMIN_EMAIL",
+      "description": "Admin login email for the COMPLSPEC STUDIO app. Default: wl.chvlad@gmail.com",
+      "requiredAtBoot": true,
+      "generatedForDevelopment": true
+    },
+    {
+      "name": "ADMIN_PASSWORD",
+      "description": "Admin login password for the COMPLSPEC STUDIO app. Default: complspec2026 — change this in the Secrets panel.",
+      "requiredAtBoot": true,
+      "generatedForDevelopment": true
+    }
+  ]
 }

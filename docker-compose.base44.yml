@@ -7,6 +7,9 @@ services:
       - /app/node_modules
     ports:
       - "3000:3000"
+    env_file:
+      - ./.env.base44-defaults
+      - /run/base44/app.env
     environment:
       - NODE_ENV=development
       # Vite >= 6.1 appends this bare env var to its allowedHosts so the preview origin is accepted.
