@@ -37,6 +37,151 @@ app.post('/api/auth/user', (req, res) => {
   }
 });
 
+// Admin login (email + password)
+app.post('/api/auth/admin-login', (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Введите email и пароль' });
+    }
+
+    const isValid = db.validateAdmin(email, password);
+    if (!isValid) {
+      return res.status(401).json({ error: 'Неверный email или пароль администратора' });
+    }
+
+    const admin = db.getAdmin();
+    const session = db.createSession({
+      email: admin.email,
+      name: admin.name,
+      role: 'team',
+      isAdmin: true,
+    });
+
+    res.json({
+      success: true,
+      token: session.token,
+      user: {
+        email: admin.email,
+        name: admin.name,
+        role: 'team',
+        isAdmin: true,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Ошибка входа' });
+  }
+});
+
+// Member project access login (by email only)
+app.post('/api/auth/member-login', (req, res) => {
+  try {
+    const { email, projectId } = req.body;
+    if (!email || !projectId) {
+      return res.status(400).json({ error: 'Укажите email и идентификатор проекта' });
+    }
+
+    const access = db.checkMemberAccess(projectId, email);
+    if (!access.allowed) {
+      return res.status(403).json({
+        success: false,
+        inMembers: false,
+        hasPendingRequest: access.hasPendingRequest || false,
+        error: access.error || 'Email не найден в списке участников этого проекта',
+      });
+    }
+
+    const session = db.createSession({
+      email,
+      name: access.name || email.split('@')[0],
+      role: access.role,
+      isAdmin: access.isAdmin,
+      projectId,
+    });
+
+    const projectData = db.getProject(projectId);
+
+    res.json({
+      success: true,
+      token: session.token,
+      user: {
+        email: session.email,
+        name: session.name,
+        role: session.role,
+        isAdmin: session.isAdmin,
+      },
+      project: projectData?.project,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Ошибка авторизации участника' });
+  }
+});
+
+// Check current session token
+app.get('/api/auth/session', (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const token = (authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : req.query.token) as string;
+
+    if (!token) {
+      return res.status(401).json({ valid: false, error: 'Токен отсутствует' });
+    }
+
+    const session = db.getSession(token);
+    if (!session) {
+      return res.status(401).json({ valid: false, error: 'Сессия недействительна или истекла' });
+    }
+
+    res.json({
+      valid: true,
+      session,
+      user: {
+        email: session.email,
+        name: session.name,
+        role: session.role,
+        isAdmin: session.isAdmin,
+        projectId: session.projectId,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ valid: false, error: err.message });
+  }
+});
+
+// Logout session
+app.post('/api/auth/logout', (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const token = (authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : req.body.token) as string;
+    if (token) {
+      db.deleteSession(token);
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin change password
+app.post('/api/auth/admin-change-password', (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const admin = db.getAdmin();
+    if (!db.validateAdmin(admin.email, currentPassword)) {
+      return res.status(401).json({ error: 'Текущий пароль неверен' });
+    }
+
+    if (!newPassword || newPassword.length < 4) {
+      return res.status(400).json({ error: 'Новый пароль должен содержать минимум 4 символа' });
+    }
+
+    db.updateAdminPassword(newPassword);
+    res.json({ success: true, message: 'Пароль успешно обновлен' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Multi-Project Management Endpoints ---
 
 // Get all projects for current user (or all if demo mode)
@@ -74,21 +219,28 @@ app.get('/api/projects/:id', (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    let userRoleInProject: 'team' | 'client' | 'contractor' = 'team';
+    let userRoleInProject: 'team' | 'client' | 'contractor' | null = null;
+    let isMemberOrAdmin = false;
     if (userEmail) {
       const isOwner =
         (result.project.ownerEmail && result.project.ownerEmail.toLowerCase() === userEmail) ||
         userEmail === 'wl.chvlad@gmail.com';
       if (isOwner) {
         userRoleInProject = 'team';
+        isMemberOrAdmin = true;
       } else {
         const member = result.project.members?.find((m) => m.email.toLowerCase() === userEmail);
         if (member) {
           userRoleInProject = member.role;
+          isMemberOrAdmin = true;
         } else {
-          userRoleInProject = 'client';
+          userRoleInProject = null;
+          isMemberOrAdmin = false;
         }
       }
+    } else {
+      userRoleInProject = 'team';
+      isMemberOrAdmin = true;
     }
 
     res.json({
@@ -98,6 +250,26 @@ app.get('/api/projects/:id', (req, res) => {
         userRoleInProject,
       },
       items: result.items,
+      isMemberOrAdmin,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Quick project access check for user email
+app.get('/api/projects/:id/access-check', (req, res) => {
+  try {
+    const email = (req.query.email as string || '').toLowerCase().trim();
+    if (!email) {
+      return res.json({ allowed: false });
+    }
+    const access = db.checkMemberAccess(req.params.id, email);
+    res.json({
+      allowed: access.allowed,
+      role: access.role,
+      isAdmin: access.isAdmin,
+      hasPendingRequest: access.hasPendingRequest || false,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -294,6 +466,98 @@ app.delete('/api/projects/:id/members', (req, res) => {
       projectId: req.params.id,
     });
     res.json({ success });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Public project info for visitors / shareable link gate
+app.get('/api/projects/:id/public', (req, res) => {
+  try {
+    const pub = db.getPublicProjectInfo(req.params.id);
+    if (!pub) {
+      return res.status(404).json({ error: 'Проект не найден' });
+    }
+    res.json({ success: true, project: pub });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get access requests for project (Admin only)
+app.get('/api/projects/:id/access-requests', (req, res) => {
+  try {
+    const requests = db.getAccessRequests(req.params.id);
+    res.json({ success: true, requests });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Submit access request (Guest visitor)
+app.post('/api/projects/:id/access-requests', (req, res) => {
+  try {
+    const { email, name, requestedRole, message } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Укажите email' });
+    }
+
+    const result = db.createAccessRequest(req.params.id, {
+      email,
+      name,
+      requestedRole,
+      message,
+    });
+
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    broadcastProjectUpdate(req.params.id, {
+      type: 'access_requests_updated',
+      projectId: req.params.id,
+      request: result.request,
+    });
+
+    res.json({ success: true, request: result.request });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Review access request (Approve / Reject) (Admin only)
+app.post('/api/projects/:id/access-requests/:reqId/review', (req, res) => {
+  try {
+    const { action, role } = req.body;
+    if (action !== 'approve' && action !== 'reject') {
+      return res.status(400).json({ error: 'Некорректное действие' });
+    }
+
+    const result = db.reviewAccessRequest(req.params.id, req.params.reqId, action, role);
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    broadcastProjectUpdate(req.params.id, {
+      type: 'access_requests_updated',
+      projectId: req.params.id,
+      request: result.request,
+    });
+
+    if (action === 'approve') {
+      broadcastProjectUpdate(req.params.id, {
+        type: 'members_updated',
+        projectId: req.params.id,
+        member: result.member,
+      });
+    }
+
+    res.json({
+      success: true,
+      action,
+      member: result.member,
+      request: result.request,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

@@ -41,13 +41,14 @@ import {
 import { exportSpecificationToExcel } from './utils/exportExcel';
 import { exportSpecificationToPdf } from './utils/exportPdf';
 import { calcItemTotal, CATEGORIES } from './utils/formatters';
+import { ShareProjectModal } from './components/ShareProjectModal';
+import { ProjectAccessGate } from './components/ProjectAccessGate';
 import {
-  initAuth,
-  googleSignIn,
-  logoutGoogle,
-  getAccessToken,
-  setCachedAccessToken,
-} from './utils/firebaseAuth';
+  checkSession,
+  getStoredUser,
+  loginMember,
+  logoutAuth,
+} from './utils/authClient';
 import { extractUrlParams } from './utils/linkUtils';
 
 export default function App() {
@@ -65,7 +66,6 @@ export default function App() {
 
   // 2. User & Auth State
   const [currentUser, setCurrentUser] = useState<UserProfile>(MOCK_USER_TEAM);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
 
   // 3. UI and Sync State
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -86,7 +86,10 @@ export default function App() {
   // 5. Modals State
   const [isProjectSwitcherOpen, setIsProjectSwitcherOpen] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [gateProjectId, setGateProjectId] = useState<string | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
 
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<SpecificationItem | null>(null);
@@ -142,12 +145,8 @@ export default function App() {
   const hasProjectAccess = useMemo(() => {
     if (isRealAdmin) return true;
     if (assignedMemberRole !== null) return true;
-    const userEmail = (currentUser?.email || '').toLowerCase().trim();
-    if (!userEmail || userEmail === 'demo@complspec.kz' || userEmail === 'wl.chvlad@gmail.com') {
-      return true;
-    }
     return false;
-  }, [isRealAdmin, assignedMemberRole, currentUser?.email]);
+  }, [isRealAdmin, assignedMemberRole]);
 
   // 4. Effective role for UI view
   const effectiveRole: UserRole = useMemo(() => {
@@ -228,95 +227,144 @@ export default function App() {
     }
   }, [currentUser?.email]);
 
-  // Initialize Firebase Auth listener
+  // Session & Project initialization
   useEffect(() => {
     const { projectId: projectParam } = extractUrlParams();
 
-    const unsubscribe = initAuth(
-      async (firebaseUser, token) => {
-        setAccessToken(token);
-        if (token) setCachedAccessToken(token);
+    const initApp = async () => {
+      try {
+        // 1. Check if an active session exists on server
+        const sessionRes = await checkSession();
+        if (sessionRes.valid && sessionRes.user) {
+          const u = sessionRes.user;
+          const isUserMasterAdmin =
+            u.isAdmin ||
+            u.email.toLowerCase().trim() === 'wl.chvlad@gmail.com' ||
+            (project?.ownerEmail && u.email.toLowerCase().trim() === project.ownerEmail.toLowerCase().trim());
 
-        const email = (firebaseUser.email || '').toLowerCase().trim();
-        const name = firebaseUser.displayName || email.split('@')[0];
-        const avatar = firebaseUser.photoURL || '';
+          if (isUserMasterAdmin) {
+            const profile: UserProfile = {
+              id: `adm-${u.email}`,
+              name: u.name || 'Владислав (Администратор)',
+              email: u.email,
+              avatar: '',
+              role: 'team',
+              roleTitle: 'Администратор (Владелец)',
+              isGoogleUser: false,
+            };
+            setCurrentUser(profile);
+            const projs = await loadProjects(u.email);
+            const targetId = projectParam || (projs && projs.length > 0 ? projs[0].id : INITIAL_PROJECT.id);
+            if (targetId) {
+              await selectProject(targetId, u.email);
+            }
+            setGateProjectId(null);
+            setIsAuthChecking(false);
+            return;
+          }
 
-        try {
-          const res = await fetch('/api/auth/user', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              id: firebaseUser.uid,
-              email: firebaseUser.email,
-              name,
-              avatar,
-            }),
-          });
-          const authData = await res.json();
-          const confirmedUser = authData.success && authData.user ? authData.user : {
-            id: firebaseUser.uid,
-            name,
-            email,
-            avatar,
+          // If member has session and URL has projectParam: verify membership for THIS project!
+          if (projectParam) {
+            try {
+              const checkRes = await fetch(
+                `/api/projects/${encodeURIComponent(projectParam)}/access-check?email=${encodeURIComponent(u.email)}`
+              ).then((r) => r.json());
+
+              if (checkRes && checkRes.allowed) {
+                const profile: UserProfile = {
+                  id: `u-${u.email}`,
+                  name: u.name,
+                  email: u.email,
+                  avatar: '',
+                  role: checkRes.role || u.role,
+                  roleTitle:
+                    checkRes.role === 'contractor'
+                      ? 'Поставщик / Подрядчик'
+                      : checkRes.role === 'team'
+                      ? 'Команда (Редактор)'
+                      : 'Заказчик дизайн-проекта',
+                  isGoogleUser: false,
+                };
+                setCurrentUser(profile);
+                await loadProjects(u.email);
+                await selectProject(projectParam, u.email);
+                setGateProjectId(null);
+                setIsAuthChecking(false);
+                return;
+              }
+            } catch (e) {
+              console.warn('Failed to verify project membership:', e);
+            }
+
+            // User is not a member of projectParam -> Block with ProjectAccessGate!
+            setGateProjectId(projectParam);
+            setIsAuthChecking(false);
+            return;
+          }
+
+          // Session without projectParam: load user's projects
+          const profile: UserProfile = {
+            id: `u-${u.email}`,
+            name: u.name,
+            email: u.email,
+            avatar: '',
+            role: u.role,
+            roleTitle:
+              u.role === 'team'
+                ? 'Команда (Редактор)'
+                : u.role === 'contractor'
+                ? 'Поставщик / Подрядчик'
+                : 'Заказчик дизайн-проекта',
+            isGoogleUser: false,
           };
+          setCurrentUser(profile);
+          const projs = await loadProjects(u.email);
+          const targetId = u.projectId || (projs && projs.length > 0 ? projs[0].id : null);
+          if (targetId) {
+            await selectProject(targetId, u.email);
+            setGateProjectId(null);
+          }
+          setIsAuthChecking(false);
+          return;
+        }
 
-          // 1. Fetch user's projects list first to immediately know assigned roles
-          const userProjs = await loadProjects(confirmedUser.email);
-          let targetProjId = projectParam;
-          let initialRole: UserRole = 'team';
+        // 2. If no session, check if URL has an individual project link (?project=...)
+        if (projectParam) {
+          // Check if member email was remembered for this project
+          const rememberedEmail =
+            typeof window !== 'undefined'
+              ? localStorage.getItem(`complspec_email_${projectParam}`)
+              : null;
 
-          if (userProjs && userProjs.length > 0) {
-            const targetProj = projectParam
-              ? userProjs.find((p: Project) => p.id === projectParam) || userProjs[0]
-              : userProjs[0];
-            targetProjId = targetProj.id;
-            if (targetProj.userRoleInProject) {
-              initialRole = targetProj.userRoleInProject;
+          if (rememberedEmail) {
+            const loginRes = await loginMember(rememberedEmail, projectParam);
+            if (loginRes.success && loginRes.user) {
+              setCurrentUser(loginRes.user);
+              await loadProjects(loginRes.user.email);
+              await selectProject(projectParam, loginRes.user.email);
+              setGateProjectId(null);
+              setIsAuthChecking(false);
+              return;
             }
           }
 
-          const isUserAdmin =
-            confirmedUser.email.toLowerCase() === 'wl.chvlad@gmail.com' ||
-            (project?.ownerEmail && confirmedUser.email.toLowerCase() === project.ownerEmail.toLowerCase());
-          const finalRole = isUserAdmin ? 'team' : initialRole;
-
-          setCurrentUser({
-            id: confirmedUser.id,
-            name: confirmedUser.name,
-            email: confirmedUser.email,
-            avatar: confirmedUser.avatar || avatar,
-            role: finalRole,
-            roleTitle:
-              finalRole === 'team'
-                ? isUserAdmin ? 'Администратор (Владелец)' : 'Команда (Редактор)'
-                : finalRole === 'contractor'
-                ? 'Поставщик / Подрядчик'
-                : 'Заказчик дизайн-проекта',
-            isGoogleUser: true,
-          });
-
-          // 2. Select project with user email passed to populate full role & items
-          if (targetProjId) {
-            await selectProject(targetProjId, confirmedUser.email);
-          }
-        } catch (err) {
-          console.warn('Failed to sync user with server:', err);
+          // Show individual project gate for visitor!
+          setGateProjectId(projectParam);
+          setIsAuthChecking(false);
+          return;
         }
-      },
-      () => {
-        // Logged out / unauthenticated fallback
-        loadProjects().then((projs) => {
-          if (projs && projs.length > 0) {
-            const targetProj = projectParam
-              ? projs.find((p: Project) => p.id === projectParam) || projs[0]
-              : projs[0];
-            selectProject(targetProj.id);
-          }
-        });
-      }
-    );
 
-    return () => unsubscribe();
+        // 3. No project param and no session: load default project as studio admin
+        const projs = await loadProjects();
+        if (projs && projs.length > 0) {
+          await selectProject(projs[0].id);
+        }
+      } finally {
+        setIsAuthChecking(false);
+      }
+    };
+
+    initApp();
   }, [loadProjects, selectProject]);
 
   // Real-time automatic live synchronization (SSE instantaneous push + version-aware polling fallback)
@@ -361,7 +409,8 @@ export default function App() {
           if (
             payload.type === 'sync' ||
             payload.type === 'project_updated' ||
-            payload.type === 'members_updated'
+            payload.type === 'members_updated' ||
+            payload.type === 'access_requests_updated'
           ) {
             fetchLatestData();
           }
@@ -643,73 +692,36 @@ export default function App() {
     await syncWithServer(project, nextItems);
   };
 
-  // --- Auth Handlers ---
-  const handleGoogleSignIn = async () => {
-    const { user: fbUser, accessToken: token } = await googleSignIn();
-    setAccessToken(token);
-    setCachedAccessToken(token);
-
-    const res = await fetch('/api/auth/user', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: fbUser.uid,
-        email: fbUser.email,
-        name: fbUser.displayName,
-        avatar: fbUser.photoURL,
-      }),
-    });
-    const data = await res.json();
-    if (data.success && data.user) {
-      setCurrentUser({
-        id: data.user.id,
-        name: data.user.name,
-        email: data.user.email,
-        avatar: data.user.avatar || fbUser.photoURL || '',
-        role: 'team',
-        roleTitle: 'Дизайнер / Владелец',
-        isGoogleUser: true,
-      });
-
-      const userProjs = await loadProjects(data.user.email);
-      if (userProjs && userProjs.length > 0) {
-        await selectProject(userProjs[0].id);
-      }
+  // --- Auth & Access Handlers ---
+  const handleLoginSuccess = async (user: UserProfile) => {
+    setCurrentUser(user);
+    setGateProjectId(null);
+    const projs = await loadProjects(user.email);
+    if (projs && projs.length > 0) {
+      await selectProject(projs[0].id, user.email);
     }
   };
 
-  const handleManualSignIn = async (email: string, name: string) => {
-    const res = await fetch('/api/auth/user', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: `user-${Date.now()}`,
-        email,
-        name,
-      }),
-    });
-    const data = await res.json();
-    if (data.success && data.user) {
-      setCurrentUser({
-        id: data.user.id,
-        name: data.user.name,
-        email: data.user.email,
-        avatar: '',
-        role: 'team',
-        roleTitle: 'Дизайнер / Комплектатор',
-        isGoogleUser: false,
-      });
-
-      const userProjs = await loadProjects(data.user.email);
-      if (userProjs && userProjs.length > 0) {
-        await selectProject(userProjs[0].id);
+  const handleGateAccessGranted = async (user: UserProfile, projectData?: any) => {
+    setGateProjectId(null);
+    setCurrentUser(user);
+    if (projectData) {
+      setProject(projectData);
+      setActiveProjectId(projectData.id);
+      setRooms(projectData.rooms || []);
+      if (projectData.categories && projectData.categories.length > 0) {
+        setCategories(projectData.categories);
       }
+    }
+    const projs = await loadProjects(user.email);
+    const targetId = projectData?.id || activeProjectId;
+    if (targetId) {
+      await selectProject(targetId, user.email);
     }
   };
 
   const handleSignOut = async () => {
-    await logoutGoogle();
-    setAccessToken(null);
+    await logoutAuth();
     setCurrentUser(MOCK_USER_TEAM);
     const defaultProjs = await loadProjects();
     if (defaultProjs && defaultProjs.length > 0) {
@@ -904,6 +916,31 @@ export default function App() {
     });
   }, [items, selectedRoom, selectedCategory, selectedStatus, onlyWithDiscount, searchQuery]);
 
+  if (isAuthChecking) {
+    return (
+      <div
+        className={`min-h-screen flex items-center justify-center ${
+          isDarkMode ? 'bg-[#0a0e17] text-slate-400' : 'bg-slate-50 text-slate-500'
+        }`}
+      >
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs font-medium tracking-wide">Загрузка проекта...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (gateProjectId || (!hasProjectAccess && activeProjectId && !isRealAdmin)) {
+    return (
+      <ProjectAccessGate
+        projectId={gateProjectId || activeProjectId}
+        onAccessGranted={handleGateAccessGranted}
+        isDarkMode={isDarkMode}
+      />
+    );
+  }
+
   return (
     <div
       className={`min-h-screen transition-colors duration-200 ${
@@ -923,6 +960,7 @@ export default function App() {
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         onOpenProjectSwitcher={() => setIsProjectSwitcherOpen(true)}
         onOpenInvite={() => setIsInviteModalOpen(true)}
+        onOpenShare={() => setIsShareModalOpen(true)}
         onOpenAuth={() => setIsAuthModalOpen(true)}
         onOpenRooms={() => setIsRoomsModalOpen(true)}
         onExportPdf={handleExportPdf}
@@ -1158,6 +1196,7 @@ export default function App() {
         onDeleteProject={handleDeleteProject}
         onDuplicateProject={handleDuplicateProject}
         currentUserEmail={currentUser.email}
+        currentUserRole={effectiveRole}
         isDarkMode={isDarkMode}
       />
 
@@ -1172,12 +1211,20 @@ export default function App() {
         isDarkMode={isDarkMode}
       />
 
+      <ShareProjectModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        project={project}
+        onOpenInviteMembers={() => setIsInviteModalOpen(true)}
+        isDarkMode={isDarkMode}
+      />
+
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         currentUser={currentUser}
-        onGoogleSignIn={handleGoogleSignIn}
-        onManualSignIn={handleManualSignIn}
+        activeProjectId={activeProjectId}
+        onLoginSuccess={handleLoginSuccess}
         onSignOut={handleSignOut}
         isDarkMode={isDarkMode}
       />

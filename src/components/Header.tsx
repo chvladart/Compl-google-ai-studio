@@ -12,6 +12,7 @@ import {
   ChevronDown,
   Building2,
   Eye,
+  Share2,
 } from 'lucide-react';
 import { Project, UserProfile, UserRole } from '../types';
 
@@ -27,6 +28,7 @@ interface HeaderProps {
   onOpenSettings: () => void;
   onOpenProjectSwitcher: () => void;
   onOpenInvite: () => void;
+  onOpenShare?: () => void;
   onOpenAuth: () => void;
   onOpenRooms?: () => void;
   onExportPdf: () => void;
@@ -49,6 +51,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
   onOpenProjectSwitcher,
   onOpenInvite,
+  onOpenShare,
   onOpenAuth,
   onOpenRooms,
   onExportPdf,
@@ -111,18 +114,20 @@ export const Header: React.FC<HeaderProps> = ({
               <ChevronDown className="w-3.5 h-3.5 text-amber-500 shrink-0 ml-0.5" />
             </button>
 
-            {/* Project Settings Trigger */}
-            <button
-              onClick={onOpenSettings}
-              className={`p-1.5 rounded-lg border text-xs font-medium flex items-center gap-1 cursor-pointer transition-colors ${
-                isDarkMode
-                  ? 'bg-[#141c2b] border-[#223049] text-slate-400 hover:text-slate-200 hover:border-slate-700'
-                  : 'bg-slate-50 border-slate-200 text-slate-500 hover:text-slate-800'
-              }`}
-              title="Параметры проекта: бюджет, адрес, комнаты"
-            >
-              <Settings className="w-3.5 h-3.5" />
-            </button>
+            {/* Project Settings Trigger - only for Team / Admin */}
+            {isAdmin && (
+              <button
+                onClick={onOpenSettings}
+                className={`p-1.5 rounded-lg border text-xs font-medium flex items-center gap-1 cursor-pointer transition-colors ${
+                  isDarkMode
+                    ? 'bg-[#141c2b] border-[#223049] text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                    : 'bg-slate-50 border-slate-200 text-slate-500 hover:text-slate-800'
+                }`}
+                title="Параметры проекта: бюджет, адрес, комнаты"
+              >
+                <Settings className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -130,23 +135,54 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
           {/* Access & Role Management Admin Trigger - ONLY for Admin */}
           {isAdmin && (
-            <button
-              onClick={onOpenInvite}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
-                isDarkMode
-                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-400 hover:bg-amber-500/25 shadow-sm'
-                  : 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100'
-              }`}
-              title="Админ-панель: Управление доступом и распределение ролей участников проекта"
-            >
-              <UserPlus className="w-3.5 h-3.5 text-amber-500" />
-              <span>Доступ и роли</span>
-              {project?.members && project.members.length > 0 && (
-                <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 font-black text-[10px]">
-                  {project.members.length}
-                </span>
+            <>
+              {onOpenShare && (
+                <button
+                  type="button"
+                  onClick={onOpenShare}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
+                    isDarkMode
+                      ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/20'
+                      : 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100'
+                  }`}
+                  title="Получить индивидуальную ссылку на проект для заказчика или подрядчика"
+                >
+                  <Share2 className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Ссылка</span>
+                </button>
               )}
-            </button>
+
+              <button
+                onClick={onOpenInvite}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
+                  isDarkMode
+                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-400 hover:bg-amber-500/25 shadow-sm'
+                    : 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100'
+                }`}
+                title="Админ-панель: Управление доступом и распределение ролей участников проекта"
+              >
+                <UserPlus className="w-3.5 h-3.5 text-amber-500" />
+                <span>Доступ и роли</span>
+                {(() => {
+                  const pendingCount = (project?.accessRequests || []).filter((r: any) => r.status === 'pending').length;
+                  if (pendingCount > 0) {
+                    return (
+                      <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-rose-500 text-white font-black text-[10px] animate-pulse">
+                        +{pendingCount}
+                      </span>
+                    );
+                  }
+                  if (project?.members && project.members.length > 0) {
+                    return (
+                      <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 font-black text-[10px]">
+                        {project.members.length}
+                      </span>
+                    );
+                  }
+                  return null;
+                })()}
+              </button>
+            </>
           )}
 
           {/* Admin Role Simulation Switcher - Allows admin to preview as Client or Contractor */}
@@ -218,10 +254,10 @@ export const Header: React.FC<HeaderProps> = ({
             type="button"
             onClick={onExportPdf}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 active:scale-95 text-white text-xs font-bold shadow-sm transition-all cursor-pointer"
-            title="Экспорт в PDF с качественной версткой без съездов текста и ценами в ₸"
+            title="Экспорт в PDF с качественной версткой"
           >
             <FileText className="w-3.5 h-3.5 stroke-[2.5]" />
-            <span>PDF (₸)</span>
+            <span>PDF</span>
           </button>
 
           {/* Excel Export Button */}
@@ -229,10 +265,10 @@ export const Header: React.FC<HeaderProps> = ({
             type="button"
             onClick={onExportExcel}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-bold shadow-sm transition-all cursor-pointer"
-            title="Экспорт в Excel с формулами и суммами в тенге (₸)"
+            title="Экспорт в Excel с формулами и суммами"
           >
             <FileSpreadsheet className="w-3.5 h-3.5 stroke-[2.5]" />
-            <span>Excel (₸)</span>
+            <span>Excel</span>
           </button>
 
           {/* User Account / Auth Modal Trigger */}

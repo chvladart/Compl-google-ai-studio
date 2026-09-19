@@ -1,24 +1,28 @@
 import React, { useState } from 'react';
-import { UserProfile } from '../types';
+import { UserProfile, UserRole } from '../types';
 import {
   LogIn,
   LogOut,
   Mail,
+  Lock,
   User,
   ShieldCheck,
-  CheckCircle,
+  CheckCircle2,
   X,
   Sparkles,
-  Database,
+  KeyRound,
+  AlertCircle,
+  UserCheck,
 } from 'lucide-react';
+import { loginAdmin, loginMember, logoutAuth } from '../utils/authClient';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentUser: UserProfile;
-  onGoogleSignIn: () => Promise<void>;
-  onManualSignIn: (email: string, name: string) => Promise<void>;
-  onSignOut: () => Promise<void>;
+  activeProjectId?: string;
+  onLoginSuccess: (user: UserProfile) => void;
+  onSignOut: () => void;
   isDarkMode?: boolean;
 }
 
@@ -26,51 +30,111 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   isOpen,
   onClose,
   currentUser,
-  onGoogleSignIn,
-  onManualSignIn,
+  activeProjectId,
+  onLoginSuccess,
   onSignOut,
   isDarkMode = true,
 }) => {
-  const [email, setEmail] = useState('');
-  const [name, setName] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
+  const [activeTab, setActiveTab] = useState<'admin' | 'member'>('admin');
+
+  // Admin login fields
+  const [adminEmail, setAdminEmail] = useState('wl.chvlad@gmail.com');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [isAdminSubmitting, setIsAdminSubmitting] = useState(false);
+  const [adminError, setAdminError] = useState('');
+
+  // Password change
+  const [showChangePass, setShowChangePass] = useState(false);
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [changePassSuccess, setChangePassSuccess] = useState('');
+
+  // Member email login fields
+  const [memberEmail, setMemberEmail] = useState('');
+  const [isMemberSubmitting, setIsMemberSubmitting] = useState(false);
+  const [memberError, setMemberError] = useState('');
 
   if (!isOpen) return null;
 
-  const handleGoogleLogin = async () => {
-    setIsLoading(true);
-    setErrorMsg('');
-    try {
-      await onGoogleSignIn();
-      onClose();
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Ошибка входа через Google. Попробуйте еще раз.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleManualSubmit = async (e: React.FormEvent) => {
+  const handleAdminSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) return;
+    if (!adminEmail.trim() || !adminPassword.trim()) return;
 
-    setIsLoading(true);
-    setErrorMsg('');
+    setIsAdminSubmitting(true);
+    setAdminError('');
     try {
-      await onManualSignIn(email.trim(), name.trim() || email.split('@')[0]);
-      onClose();
+      const result = await loginAdmin(adminEmail.trim(), adminPassword);
+      if (result.success && result.user) {
+        onLoginSuccess(result.user);
+        onClose();
+      } else {
+        setAdminError(result.error || 'Неверный email или пароль');
+      }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Ошибка авторизации');
+      setAdminError(err.message || 'Ошибка входа');
     } finally {
-      setIsLoading(false);
+      setIsAdminSubmitting(false);
     }
   };
 
-  const isGuestOrDemo = currentUser.email === 'demo@complspec.kz' || !currentUser.isGoogleUser;
+  const handleMemberSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!memberEmail.trim()) return;
+
+    setIsMemberSubmitting(true);
+    setMemberError('');
+    try {
+      const result = await loginMember(memberEmail.trim().toLowerCase(), activeProjectId || 'proj-1');
+      if (result.success && result.user) {
+        onLoginSuccess(result.user);
+        onClose();
+      } else {
+        setMemberError(result.error || 'Email не найден в участниках проекта');
+      }
+    } catch (err: any) {
+      setMemberError(err.message || 'Ошибка входа');
+    } finally {
+      setIsMemberSubmitting(false);
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminError('');
+    setChangePassSuccess('');
+    try {
+      const res = await fetch('/api/auth/admin-change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentPassword: oldPassword,
+          newPassword,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setChangePassSuccess('Пароль администратора успешно изменен!');
+        setShowChangePass(false);
+        setOldPassword('');
+        setNewPassword('');
+      } else {
+        setAdminError(data.error || 'Ошибка смены пароля');
+      }
+    } catch (err: any) {
+      setAdminError(err.message || 'Ошибка запроса');
+    }
+  };
+
+  const handleLogout = async () => {
+    await logoutAuth();
+    onSignOut();
+    onClose();
+  };
+
+  const isAdmin = currentUser.email.toLowerCase() === 'wl.chvlad@gmail.com' || currentUser.role === 'team';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
       <div
         className={`w-full max-w-md rounded-2xl shadow-2xl border flex flex-col overflow-hidden ${
           isDarkMode ? 'bg-[#0f172a] border-slate-800 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
@@ -78,17 +142,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       >
         {/* Header */}
         <div
-          className={`px-6 py-4 border-b flex items-center justify-between ${
+          className={`px-5 sm:px-6 py-4 border-b flex items-center justify-between ${
             isDarkMode ? 'border-slate-800 bg-[#162238]' : 'border-slate-200 bg-slate-50'
           }`}
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-500">
+            <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-500 border border-amber-500/20">
               <ShieldCheck className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-lg font-bold">Личный кабинет</h2>
-              <p className="text-xs text-slate-400">Авторизация и права доступа к проектам</p>
+              <h2 className="text-base sm:text-lg font-bold">Авторизация в системе</h2>
+              <p className="text-xs text-slate-400">Вход для администратора и участников</p>
             </div>
           </div>
 
@@ -100,166 +164,245 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </button>
         </div>
 
-        {/* Body */}
-        <div className="p-6 space-y-6">
-          {/* Current Profile Card */}
-          <div
-            className={`p-4 rounded-xl border flex items-center justify-between ${
-              isDarkMode ? 'bg-[#131d31] border-slate-800' : 'bg-slate-50 border-slate-200'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              {currentUser.avatar ? (
-                <img
-                  src={currentUser.avatar}
-                  alt={currentUser.name}
-                  className="w-11 h-11 rounded-full object-cover border-2 border-amber-500"
-                />
-              ) : (
-                <div className="w-11 h-11 rounded-full bg-amber-500 text-slate-950 font-black flex items-center justify-center text-base">
-                  {currentUser.name[0].toUpperCase()}
-                </div>
-              )}
-              <div>
-                <div className="text-sm font-bold flex items-center gap-1.5">
-                  {currentUser.name}
-                  {currentUser.isGoogleUser && (
-                    <CheckCircle className="w-4 h-4 text-emerald-400" />
-                  )}
-                </div>
-                <div className="text-xs text-slate-400">{currentUser.email}</div>
-                <div className="text-[10px] text-amber-400 font-semibold mt-0.5">
-                  {currentUser.roleTitle}
-                </div>
-              </div>
-            </div>
-
-            {currentUser.isGoogleUser && (
-              <button
-                onClick={async () => {
-                  await onSignOut();
-                  onClose();
-                }}
-                className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-                title="Выйти из аккаунта"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-
-          {/* Database Info Callout */}
-          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-start gap-2.5">
-            <Database className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-            <div>
-              <strong>Единая база данных проектов:</strong>
-              <div className="text-slate-300 text-[11px] mt-0.5 leading-relaxed">
-                Все участники (дизайнер, заказчик, поставщик) работают в едином общем проекте в реальном времени с автоматическим разграничением прав по роли Google-аккаунта.
-              </div>
-            </div>
-          </div>
-
-          {/* Google Sign In Button */}
-          <div className="space-y-3">
-            <button
-              onClick={handleGoogleLogin}
-              disabled={isLoading}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 font-bold text-sm shadow-sm transition-all disabled:opacity-50"
-            >
-              <svg className="w-5 h-5" viewBox="0 0 24 24">
-                <path
-                  fill="#4285F4"
-                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                />
-              </svg>
-              <span>{currentUser.isGoogleUser ? 'Сменить аккаунт Google' : 'Войти через Google'}</span>
-            </button>
-          </div>
-
-          {/* Divider */}
-          <div className="flex items-center gap-3">
-            <div className="flex-1 h-px bg-slate-800" />
-            <span className="text-[11px] text-slate-500 uppercase font-semibold">или по email</span>
-            <div className="flex-1 h-px bg-slate-800" />
-          </div>
-
-          {/* Manual Email Login Form */}
-          <form onSubmit={handleManualSubmit} className="space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">Ваш Email:</label>
-              <div className="relative">
-                <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="email"
-                  required
-                  placeholder="designer@studio.kz"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className={`w-full rounded-xl pl-10 pr-4 py-2.5 text-sm border focus:outline-none focus:border-amber-500 ${
-                    isDarkMode ? 'bg-[#131d31] border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
-                  }`}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">Имя / Студия:</label>
-              <div className="relative">
-                <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="Айгерим Султанова"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className={`w-full rounded-xl pl-10 pr-4 py-2.5 text-sm border focus:outline-none focus:border-amber-500 ${
-                    isDarkMode ? 'bg-[#131d31] border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
-                  }`}
-                />
-              </div>
-            </div>
-
-            {errorMsg && (
-              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-semibold">
-                {errorMsg}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={isLoading || !email.trim()}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors shadow-md disabled:opacity-50"
-            >
-              <LogIn className="w-4 h-4" />
-              {isLoading ? 'Вход...' : 'Войти в систему'}
-            </button>
-          </form>
-        </div>
-
-        {/* Footer */}
+        {/* Current user banner if logged in */}
         <div
-          className={`px-6 py-3 border-t text-xs flex items-center justify-between ${
-            isDarkMode ? 'border-slate-800 bg-[#111928] text-slate-400' : 'border-slate-200 bg-slate-50 text-slate-500'
+          className={`px-5 sm:px-6 py-3 border-b flex items-center justify-between ${
+            isDarkMode ? 'bg-[#111a2e] border-slate-800' : 'bg-slate-50 border-slate-200'
           }`}
         >
-          <span>Безопасная авторизация через Firebase + Google</span>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-full bg-amber-500 text-slate-950 font-bold flex items-center justify-center text-xs shrink-0 shadow">
+              {(currentUser.name || currentUser.email || 'U')[0].toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <span className="text-xs font-bold block truncate text-slate-200">{currentUser.name}</span>
+              <span className="text-[11px] font-mono text-slate-400 block truncate">{currentUser.email}</span>
+            </div>
+          </div>
+
           <button
-            onClick={onClose}
-            className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold"
+            type="button"
+            onClick={handleLogout}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-rose-400 hover:bg-rose-500/10 border border-rose-500/20 transition-colors cursor-pointer"
           >
-            Закрыть
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Выйти</span>
           </button>
+        </div>
+
+        {/* Tabs */}
+        <div
+          className={`grid grid-cols-2 border-b text-xs font-bold ${
+            isDarkMode ? 'border-slate-800 bg-[#0d1320]' : 'border-slate-200 bg-slate-100'
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => setActiveTab('admin')}
+            className={`py-3 px-4 text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
+              activeTab === 'admin'
+                ? 'border-b-2 border-amber-500 text-amber-400 bg-amber-500/5'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Администратор</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('member')}
+            className={`py-3 px-4 text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
+              activeTab === 'member'
+                ? 'border-b-2 border-amber-500 text-amber-400 bg-amber-500/5'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <UserCheck className="w-3.5 h-3.5" />
+            <span>По email (без пароля)</span>
+          </button>
+        </div>
+
+        {/* Form Body */}
+        <div className="p-5 sm:p-6 space-y-4">
+          {changePassSuccess && (
+            <div className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{changePassSuccess}</span>
+            </div>
+          )}
+
+          {activeTab === 'admin' && (
+            <div className="space-y-4">
+              {adminError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>{adminError}</span>
+                </div>
+              )}
+
+              {!showChangePass ? (
+                <form onSubmit={handleAdminSubmit} className="space-y-3.5">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                      <Mail className="w-3.5 h-3.5 text-amber-500" />
+                      Email администратора
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      value={adminEmail}
+                      onChange={(e) => setAdminEmail(e.target.value)}
+                      className={`w-full rounded-xl px-3.5 py-2.5 text-xs border focus:outline-none focus:border-amber-500 ${
+                        isDarkMode ? 'bg-[#182235] border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                      }`}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-amber-500" />
+                      Пароль
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="••••••••"
+                      value={adminPassword}
+                      onChange={(e) => setAdminPassword(e.target.value)}
+                      className={`w-full rounded-xl px-3.5 py-2.5 text-xs border focus:outline-none focus:border-amber-500 ${
+                        isDarkMode ? 'bg-[#182235] border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                      }`}
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isAdminSubmitting || !adminEmail.trim() || !adminPassword.trim()}
+                    className="w-full py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {isAdminSubmitting ? (
+                      <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <LogIn className="w-3.5 h-3.5" />
+                        <span>Войти как Администратор</span>
+                      </>
+                    )}
+                  </button>
+
+                  <div className="pt-2 text-center">
+                    <button
+                      type="button"
+                      onClick={() => setShowChangePass(true)}
+                      className="text-[11px] text-slate-400 hover:text-amber-400 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <KeyRound className="w-3 h-3" />
+                      <span>Сменить пароль администратора</span>
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form onSubmit={handleChangePassword} className="space-y-3.5">
+                  <h3 className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
+                    <KeyRound className="w-3.5 h-3.5" />
+                    Смена пароля администратора
+                  </h3>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-300">Текущий пароль</label>
+                    <input
+                      type="password"
+                      required
+                      value={oldPassword}
+                      onChange={(e) => setOldPassword(e.target.value)}
+                      className={`w-full rounded-xl px-3.5 py-2 text-xs border focus:outline-none focus:border-amber-500 ${
+                        isDarkMode ? 'bg-[#182235] border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                      }`}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-300">Новый пароль</label>
+                    <input
+                      type="password"
+                      required
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className={`w-full rounded-xl px-3.5 py-2 text-xs border focus:outline-none focus:border-amber-500 ${
+                        isDarkMode ? 'bg-[#182235] border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                      }`}
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="submit"
+                      className="flex-1 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow transition-colors cursor-pointer"
+                    >
+                      Сохранить новый пароль
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowChangePass(false)}
+                      className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors cursor-pointer"
+                    >
+                      Отмена
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'member' && (
+            <div className="space-y-4">
+              <p className="text-xs text-slate-400">
+                Введите ваш email. Если администратор добавил вас в список участников, доступ откроется мгновенно без пароля.
+              </p>
+
+              {memberError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>{memberError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleMemberSubmit} className="space-y-3.5">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                    <Mail className="w-3.5 h-3.5 text-amber-500" />
+                    Ваш рабочий Email
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="client@gmail.com или partner@mail.kz"
+                    value={memberEmail}
+                    onChange={(e) => setMemberEmail(e.target.value)}
+                    className={`w-full rounded-xl px-3.5 py-2.5 text-xs border focus:outline-none focus:border-amber-500 ${
+                      isDarkMode ? 'bg-[#182235] border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isMemberSubmitting || !memberEmail.trim()}
+                  className="w-full py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {isMemberSubmitting ? (
+                    <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <LogIn className="w-3.5 h-3.5" />
+                      <span>Войти по email</span>
+                    </>
+                  )}
+                </button>
+              </form>
+            </div>
+          )}
         </div>
       </div>
     </div>

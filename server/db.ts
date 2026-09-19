@@ -1,5 +1,15 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
+
+export function hashPassword(password: string): string {
+  const salt = 'complspec_secure_salt_v1';
+  return crypto.createHash('sha256').update(password + salt).digest('hex');
+}
+
+export function verifyPassword(password: string, hash: string): boolean {
+  return hashPassword(password) === hash;
+}
 
 export interface Room {
   id: string;
@@ -17,6 +27,36 @@ export interface ProjectMember {
   acceptedAt?: string;
 }
 
+export interface AccessRequest {
+  id: string;
+  projectId: string;
+  email: string;
+  name: string;
+  requestedRole: 'client' | 'contractor';
+  message?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  reviewedAt?: string;
+  reviewedRole?: 'team' | 'client' | 'contractor';
+}
+
+export interface AdminAccount {
+  email: string;
+  passwordHash: string;
+  name: string;
+}
+
+export interface SessionRecord {
+  token: string;
+  email: string;
+  name: string;
+  role: 'team' | 'client' | 'contractor';
+  isAdmin: boolean;
+  projectId?: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export interface ProjectRecord {
   id: string;
   name: string;
@@ -31,6 +71,8 @@ export interface ProjectRecord {
   ownerId: string;
   ownerEmail: string;
   members: ProjectMember[];
+  accessRequests?: AccessRequest[];
+  shareToken?: string;
   status: 'active' | 'completed' | 'archived';
   version?: number;
   createdAt: string;
@@ -63,6 +105,7 @@ export interface DatabaseData {
   projects: Record<string, ProjectRecord>;
   items: Record<string, any[]>;
   invitations: Record<string, InvitationRecord>;
+  admin?: AdminAccount;
 }
 
 const DB_DIR = path.join(process.cwd(), 'data');
@@ -355,22 +398,24 @@ const INITIAL_PROJECT_2_ITEMS = [
 
 class DatabaseManager {
   private data: DatabaseData;
+  private sessions: Map<string, SessionRecord> = new Map();
 
   constructor() {
     this.data = this.load();
   }
 
   private load(): DatabaseData {
+    let loadedData: DatabaseData | null = null;
     try {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        return JSON.parse(raw);
+        loadedData = JSON.parse(raw);
       }
     } catch (err) {
       console.error('[DB] Failed to load database file, initializing defaults:', err);
     }
 
-    const initialData: DatabaseData = {
+    const initialData: DatabaseData = loadedData || {
       users: {
         'default-user': {
           id: 'default-user',
@@ -378,7 +423,7 @@ class DatabaseManager {
           name: 'Дизайн-студия COMPLSPEC',
           role: 'team',
           createdAt: new Date().toISOString(),
-        }
+        },
       },
       projects: {
         'proj-1': DEFAULT_PROJECT_1,
@@ -391,8 +436,317 @@ class DatabaseManager {
       invitations: {},
     };
 
+    // Ensure master admin account exists
+    if (!initialData.admin) {
+      initialData.admin = {
+        email: 'wl.chvlad@gmail.com',
+        passwordHash: hashPassword(process.env.ADMIN_PASSWORD || 'admin123'),
+        name: 'Владислав (Администратор студии)',
+      };
+    }
+
+    // Ensure projects have accessRequests and shareToken
+    for (const pId of Object.keys(initialData.projects)) {
+      const p = initialData.projects[pId];
+      if (!p.accessRequests) p.accessRequests = [];
+      if (!p.shareToken) p.shareToken = `st-${p.id}`;
+      if (!p.members) p.members = [];
+    }
+
     this.saveDirect(initialData);
     return initialData;
+  }
+
+  // --- Admin & Sessions ---
+  public getAdmin(): { email: string; name: string } {
+    const adm = this.data.admin || {
+      email: 'wl.chvlad@gmail.com',
+      passwordHash: hashPassword('admin123'),
+      name: 'Владислав (Администратор)',
+    };
+    return { email: adm.email, name: adm.name };
+  }
+
+  public validateAdmin(email: string, password: string): boolean {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    const adm = this.data.admin || {
+      email: 'wl.chvlad@gmail.com',
+      passwordHash: hashPassword('admin123'),
+      name: 'Владислав (Администратор)',
+    };
+
+    if (adm.email.toLowerCase() !== cleanEmail) {
+      return false;
+    }
+
+    return verifyPassword(password, adm.passwordHash);
+  }
+
+  public updateAdminPassword(newPassword: string): boolean {
+    if (!newPassword || newPassword.length < 4) return false;
+    if (!this.data.admin) {
+      this.data.admin = {
+        email: 'wl.chvlad@gmail.com',
+        passwordHash: hashPassword(newPassword),
+        name: 'Владислав (Администратор)',
+      };
+    } else {
+      this.data.admin.passwordHash = hashPassword(newPassword);
+    }
+    this.save();
+    return true;
+  }
+
+  public createSession(data: {
+    email: string;
+    name?: string;
+    role: 'team' | 'client' | 'contractor';
+    isAdmin: boolean;
+    projectId?: string;
+  }): SessionRecord {
+    const token = `cs-${Date.now()}-${Math.random().toString(36).substring(2, 10)}${Math.random().toString(36).substring(2, 10)}`;
+    const now = new Date();
+    const expires = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days
+
+    const session: SessionRecord = {
+      token,
+      email: data.email.toLowerCase().trim(),
+      name: data.name || data.email.split('@')[0],
+      role: data.role,
+      isAdmin: data.isAdmin,
+      projectId: data.projectId,
+      createdAt: now.toISOString(),
+      expiresAt: expires.toISOString(),
+    };
+
+    this.sessions.set(token, session);
+    return session;
+  }
+
+  public getSession(token: string): SessionRecord | null {
+    if (!token) return null;
+    const session = this.sessions.get(token);
+    if (!session) return null;
+
+    if (new Date(session.expiresAt).getTime() < Date.now()) {
+      this.sessions.delete(token);
+      return null;
+    }
+    return session;
+  }
+
+  public deleteSession(token: string): boolean {
+    return this.sessions.delete(token);
+  }
+
+  public checkMemberAccess(
+    projectId: string,
+    email: string
+  ): {
+    allowed: boolean;
+    role: 'team' | 'client' | 'contractor';
+    isAdmin: boolean;
+    name?: string;
+    hasPendingRequest?: boolean;
+    error?: string;
+  } {
+    const project = this.data.projects[projectId];
+    if (!project) {
+      return { allowed: false, role: 'client', isAdmin: false, error: 'Проект не найден' };
+    }
+
+    const cleanEmail = (email || '').toLowerCase().trim();
+    if (!cleanEmail) {
+      return { allowed: false, role: 'client', isAdmin: false, error: 'Укажите email' };
+    }
+
+    // 1. Master studio admin check
+    const isMasterAdmin = cleanEmail === (this.data.admin?.email.toLowerCase() || 'wl.chvlad@gmail.com');
+    if (isMasterAdmin) {
+      return {
+        allowed: true,
+        role: 'team',
+        isAdmin: true,
+        name: this.data.admin?.name || 'Администратор',
+      };
+    }
+
+    // 2. Project creator/owner check
+    if (project.ownerEmail && project.ownerEmail.toLowerCase().trim() === cleanEmail) {
+      return {
+        allowed: true,
+        role: 'team',
+        isAdmin: true,
+        name: 'Владелец проекта',
+      };
+    }
+
+    // 3. Project members list check
+    const member = (project.members || []).find(
+      (m) => m.email && m.email.toLowerCase().trim() === cleanEmail
+    );
+
+    if (member) {
+      return {
+        allowed: true,
+        role: member.role,
+        isAdmin: false,
+        name: member.name,
+      };
+    }
+
+    // 4. Not a member - check if pending request exists
+    const hasPending = (project.accessRequests || []).some(
+      (r) => r.email.toLowerCase().trim() === cleanEmail && r.status === 'pending'
+    );
+
+    return {
+      allowed: false,
+      role: 'client',
+      isAdmin: false,
+      hasPendingRequest: hasPending,
+      error: 'Вы пока не добавлены в список участников этого проекта',
+    };
+  }
+
+  public createAccessRequest(
+    projectId: string,
+    req: {
+      email: string;
+      name: string;
+      requestedRole?: 'client' | 'contractor';
+      message?: string;
+    }
+  ): { success: boolean; request?: AccessRequest; error?: string } {
+    const project = this.data.projects[projectId];
+    if (!project) return { success: false, error: 'Проект не найден' };
+
+    const cleanEmail = (req.email || '').toLowerCase().trim();
+    if (!cleanEmail) return { success: false, error: 'Email обязателен' };
+
+    if (!project.accessRequests) project.accessRequests = [];
+
+    // Check if already a member
+    const isAlreadyMember = (project.members || []).some(
+      (m) => m.email.toLowerCase().trim() === cleanEmail
+    );
+    if (isAlreadyMember) {
+      return { success: false, error: 'Вы уже являетесь участником проекта. Введите email для входа.' };
+    }
+
+    // Check existing pending request
+    const existingReq = project.accessRequests.find(
+      (r) => r.email.toLowerCase().trim() === cleanEmail && r.status === 'pending'
+    );
+    if (existingReq) {
+      existingReq.name = req.name || existingReq.name;
+      existingReq.message = req.message || existingReq.message;
+      existingReq.requestedRole = req.requestedRole || existingReq.requestedRole;
+      this.save();
+      return { success: true, request: existingReq };
+    }
+
+    const newReq: AccessRequest = {
+      id: `req-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      projectId,
+      email: cleanEmail,
+      name: req.name || cleanEmail.split('@')[0],
+      requestedRole: req.requestedRole || 'client',
+      message: req.message?.trim(),
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+
+    project.accessRequests.unshift(newReq);
+    this.save();
+    return { success: true, request: newReq };
+  }
+
+  public getAccessRequests(projectId: string): AccessRequest[] {
+    const project = this.data.projects[projectId];
+    if (!project) return [];
+    return project.accessRequests || [];
+  }
+
+  public reviewAccessRequest(
+    projectId: string,
+    requestId: string,
+    action: 'approve' | 'reject',
+    role?: 'team' | 'client' | 'contractor'
+  ): { success: boolean; member?: ProjectMember; request?: AccessRequest; error?: string } {
+    const project = this.data.projects[projectId];
+    if (!project) return { success: false, error: 'Проект не найден' };
+
+    if (!project.accessRequests) project.accessRequests = [];
+    const targetReq = project.accessRequests.find((r) => r.id === requestId);
+    if (!targetReq) return { success: false, error: 'Запрос не найден' };
+
+    const assignedRole = role || targetReq.requestedRole || 'client';
+    targetReq.status = action === 'approve' ? 'approved' : 'rejected';
+    targetReq.reviewedAt = new Date().toISOString();
+    targetReq.reviewedRole = assignedRole;
+
+    let member: ProjectMember | undefined;
+
+    if (action === 'approve') {
+      if (!project.members) project.members = [];
+      const cleanEmail = targetReq.email.toLowerCase().trim();
+      const existingMember = project.members.find(
+        (m) => m.email.toLowerCase().trim() === cleanEmail
+      );
+
+      if (existingMember) {
+        existingMember.role = assignedRole;
+        existingMember.status = 'active';
+        existingMember.acceptedAt = new Date().toISOString();
+        if (targetReq.name) existingMember.name = targetReq.name;
+        member = existingMember;
+      } else {
+        member = {
+          id: `mem-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+          email: cleanEmail,
+          name: targetReq.name,
+          role: assignedRole,
+          status: 'active',
+          invitedAt: targetReq.createdAt,
+          acceptedAt: new Date().toISOString(),
+        };
+        project.members.push(member);
+      }
+      project.version = (project.version || 1) + 1;
+      project.updatedAt = new Date().toISOString();
+    }
+
+    this.save();
+    return { success: true, member, request: targetReq };
+  }
+
+  public getPublicProjectInfo(projectId: string): {
+    id: string;
+    name: string;
+    client: string;
+    address: string;
+    area: number;
+    description: string;
+    roomsCount: number;
+    itemsCount: number;
+    ownerName?: string;
+  } | null {
+    const project = this.data.projects[projectId];
+    if (!project) return null;
+    const items = this.data.items[projectId] || [];
+
+    return {
+      id: project.id,
+      name: project.name,
+      client: project.client,
+      address: project.address,
+      area: project.area,
+      description: project.description,
+      roomsCount: (project.rooms || []).length,
+      itemsCount: items.length,
+      ownerName: project.ownerEmail || 'COMPLSPEC Studio',
+    };
   }
 
   private saveDirect(data: DatabaseData) {
@@ -470,7 +824,7 @@ class DatabaseManager {
       })
       .map((p) => {
         const items = this.data.items[p.id] || [];
-        let role: 'team' | 'client' | 'contractor' = 'client';
+        let role: 'team' | 'client' | 'contractor' = 'team';
 
         if (isMasterAdmin || (cleanEmail && p.ownerEmail && p.ownerEmail.toLowerCase().trim() === cleanEmail)) {
           role = 'team';
@@ -478,6 +832,8 @@ class DatabaseManager {
           const member = p.members?.find((m) => m.email && m.email.toLowerCase().trim() === cleanEmail);
           if (member) {
             role = member.role;
+          } else {
+            role = 'client';
           }
         }
 

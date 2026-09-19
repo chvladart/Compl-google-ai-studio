@@ -24,6 +24,7 @@ interface ProjectSwitcherModalProps {
   onDeleteProject?: (projectId: string) => Promise<void>;
   onDuplicateProject?: (projectId: string) => Promise<void>;
   currentUserEmail?: string;
+  currentUserRole?: UserRole;
   isDarkMode?: boolean;
 }
 
@@ -37,8 +38,10 @@ export const ProjectSwitcherModal: React.FC<ProjectSwitcherModalProps> = ({
   onDeleteProject,
   onDuplicateProject,
   currentUserEmail,
+  currentUserRole = 'team',
   isDarkMode = true,
 }) => {
+  const isTeam = currentUserRole === 'team';
   const [isCreating, setIsCreating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -113,7 +116,7 @@ export const ProjectSwitcherModal: React.FC<ProjectSwitcherModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            {!isCreating && (
+            {isTeam && !isCreating && (
               <button
                 onClick={() => setIsCreating(true)}
                 className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors shadow-sm"
@@ -338,7 +341,7 @@ export const ProjectSwitcherModal: React.FC<ProjectSwitcherModalProps> = ({
 
                       {/* Actions */}
                       <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
-                        {onDuplicateProject && (
+                        {isTeam && onDuplicateProject && (
                           <button
                             title="Дублировать проект"
                             onClick={() => onDuplicateProject(p.id)}
@@ -347,7 +350,7 @@ export const ProjectSwitcherModal: React.FC<ProjectSwitcherModalProps> = ({
                             <Copy className="w-4 h-4" />
                           </button>
                         )}
-                        {onDeleteProject && projects.length > 1 && (
+                        {isTeam && onDeleteProject && projects.length > 1 && (
                           <button
                             title="Удалить проект"
                             onClick={() => {
@@ -386,16 +389,6 @@ export const ProjectSwitcherModal: React.FC<ProjectSwitcherModalProps> = ({
               </div>
             </>
           )}
-        </div>
-
-        {/* Footer */}
-        <div
-          className={`px-6 py-3 border-t text-xs flex items-center justify-between ${
-            isDarkMode ? 'border-slate-800 bg-[#111928] text-slate-400' : 'border-slate-200 bg-slate-50 text-slate-500'
-          }`}
-        >
-          <span>Валюта всех расчетов: <strong>Казахстанский тенге (₸)</strong></span>
-          <span>База данных: <strong>Онлайн сохранение + Google Drive</strong></span>
         </div>
       </div>
     </div>
